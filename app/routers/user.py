@@ -143,7 +143,6 @@ async def login(data: UserLogin, request: Request, db: AsyncSession = Depends(ge
 async def logout(
     request: Request,
     user_id: str = Depends(get_current_user_id),
-    authorization: str = Depends(lambda h: h.get("Authorization", "")),
 ):
     """
     用户登出
@@ -151,25 +150,35 @@ async def logout(
     将 Access Token 加入黑名单，删除 Refresh Token 白名单。
     如果提供了 device_id，只撤销当前设备会话；否则撤销所有。
     """
+    # 从 Request headers 获取 Authorization（不再用 Depends lambda）
+    authorization = request.headers.get("authorization", "")
+    
     # 解析当前 Token 的 jti
     token = authorization.split()[-1] if authorization else ""
-    payload = decode_token(token)
-    jti = payload.get("jti")
+    jti = None
+    if token:
+        try:
+            payload = decode_token(token)
+            jti = payload.get("jti")
+        except Exception:
+            pass
     
     if jti:
-        # 计算剩余有效期
+        # 计算剩余有效期，加入黑名单
         from datetime import datetime, timezone
         exp = payload.get("exp", 0)
         remaining = max(0, int(exp - datetime.now(timezone.utc).timestamp()))
         await blacklist_access_token(jti, remaining)
     
-    # 尝试从 body 获取 device_id（可选）
+    # 尝试从 body 获取 device_id（可选，前端可能不传 body）
     device_id = None
-    try:
-        body = await request.json()
-        device_id = body.get("device_id")
-    except Exception:
-        pass
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+            device_id = body.get("device_id")
+        except Exception:
+            pass
     
     if device_id:
         # 只撤销当前设备会话
@@ -178,10 +187,10 @@ async def logout(
         if jti:
             await revoke_refresh_token(user_id, jti)
     else:
-        # 向后兼容：撤销所有 refresh token
+        # 向后兼容：撤销所有 refresh token + 清理所有设备会话
         await revoke_all_refresh_tokens(user_id)
     
-    logger.info(f"用户登出: user_id={user_id}, device_id={device_id or 'ALL'}")
+    logger.info(f"用户登出: user_id={user_id}, device_id={device_id or 'ALL'}, token_blacklisted={jti is not None}")
     return success_response(message="登出成功")
 
 
@@ -272,7 +281,6 @@ async def revoke_session(
     device_id: str,
     request: Request,
     user_id: str = Depends(get_current_user_id),
-    authorization: str = Depends(lambda h: h.get("Authorization", "")),
 ):
     """
     主动撤销指定设备的会话
@@ -297,15 +305,19 @@ async def revoke_session(
     current_device_id = request.headers.get("X-Device-Id")
     if current_device_id == device_id:
         # 同时 blacklist 当前 access_token
+        authorization = request.headers.get("authorization", "")
         token = authorization.split()[-1] if authorization else ""
         if token:
-            payload = decode_token(token)
-            jti = payload.get("jti")
-            if jti:
-                from datetime import datetime, timezone
-                exp = payload.get("exp", 0)
-                remaining = max(0, int(exp - datetime.now(timezone.utc).timestamp()))
-                await blacklist_access_token(jti, remaining)
+            try:
+                payload = decode_token(token)
+                jti = payload.get("jti")
+                if jti:
+                    from datetime import datetime, timezone
+                    exp = payload.get("exp", 0)
+                    remaining = max(0, int(exp - datetime.now(timezone.utc).timestamp()))
+                    await blacklist_access_token(jti, remaining)
+            except Exception:
+                pass
         logger.info(f"当前设备会话已撤销: device_id={device_id}")
         return success_response(message="当前会话已注销")
     
