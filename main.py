@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 
 # 必须在所有 app 导入之前加载 .env，否则模块级 os.getenv 会读到默认值
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv()   #加载环境变量
 
 # 强制 HuggingFace 离线模式（阻止在线下载模型，仅使用本地缓存）
 os.environ["HF_HUB_OFFLINE"] = "1"

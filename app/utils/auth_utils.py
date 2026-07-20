@@ -9,9 +9,10 @@
 """
 
 import os
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import Depends, Header, HTTPException, Request
 from jose import JWTError, jwt
@@ -259,22 +260,46 @@ async def revoke_refresh_token(user_id: str, jti: str) -> None:
     """
     撤销 Refresh Token（从白名单中删除）
     
+    同时查找并删除关联的设备会话记录。
+    
     Args:
         user_id: 用户 UUID
         jti: Token 唯一标识
     """
     redis = get_redis()
     await redis.delete(f"refresh_token:{user_id}:{jti}")
+    
+    # 同时清理关联的设备会话（扫描所有设备会话查找匹配的 jti）
+    try:
+        cursor = 0
+        while True:
+            cursor, keys = await redis.scan(cursor, match=f"session:{user_id}:*", count=100)
+            for key in keys:
+                session_jti = await redis.hget(key, "jti")
+                if session_jti == jti:
+                    device_id = key.split(":")[-1]
+                    await redis.delete(key)
+                    await redis.srem(f"user_sessions:{user_id}", device_id)
+                    logger.debug(f"设备会话已清理: device_id={device_id}")
+                    break
+            if cursor == 0:
+                break
+    except Exception as e:
+        logger.warning(f"清理设备会话失败: {e}")
 
 
 async def revoke_all_refresh_tokens(user_id: str) -> None:
     """
     撤销用户所有 Refresh Token（如修改密码后）
     
+    同时删除所有设备会话记录。
+    
     Args:
         user_id: 用户 UUID
     """
     redis = get_redis()
+    
+    # 删除所有 refresh token
     cursor = 0
     while True:
         cursor, keys = await redis.scan(cursor, match=f"refresh_token:{user_id}:*", count=100)
@@ -282,6 +307,19 @@ async def revoke_all_refresh_tokens(user_id: str) -> None:
             await redis.delete(*keys)
         if cursor == 0:
             break
+    
+    # 删除所有设备会话
+    try:
+        cursor = 0
+        while True:
+            cursor, keys = await redis.scan(cursor, match=f"session:{user_id}:*", count=100)
+            if keys:
+                await redis.delete(*keys)
+            if cursor == 0:
+                break
+        await redis.delete(f"user_sessions:{user_id}")
+    except Exception as e:
+        logger.warning(f"清理设备会话失败: {e}")
 
 
 # ========== Access Token 黑名单 ==========
@@ -384,3 +422,301 @@ async def get_current_user_id(
         )
     
     return user_id
+
+
+# ========== 设备会话管理 ==========
+
+async def store_device_session(
+    user_id: str,
+    device_id: str,
+    jti: str,
+    device_name: Optional[str] = None,
+    request: Optional[Request] = None
+) -> None:
+    """
+    创建或覆盖设备会话记录
+    
+    写入 session:{user_id}:{device_id} Hash，并将 device_id 加入
+    user_sessions:{user_id} Set。TTL 与 refresh token 一致。
+    
+    Args:
+        user_id: 用户 UUID
+        device_id: 设备唯一标识
+        jti: 关联的 Refresh Token JTI
+        device_name: 前端提供的设备可读名称
+        request: FastAPI Request（用于提取 IP 和 User-Agent）
+    """
+    redis = get_redis()
+    now = datetime.now(timezone.utc).isoformat()
+    
+    # 提取 IP 和 User-Agent
+    ip = ""
+    user_agent = ""
+    if request:
+        ip = request.client.host if request.client else ""
+        user_agent = request.headers.get("user-agent", "")
+    
+    # 如果前端没提供 device_name，从 UA 解析
+    if not device_name and user_agent:
+        device_name = parse_device_name(user_agent)
+    
+    session_key = f"session:{user_id}:{device_id}"
+    ttl = REFRESH_TOKEN_EXPIRE_DAYS * 86400
+    
+    # 检查是否已存在会话（保留 created_at）
+    existing = await redis.hget(session_key, "created_at")
+    created_at = existing if existing else now
+    
+    # 写入会话信息（逐字段设置，兼容所有 redis-py 版本）
+    session_data = {
+        "jti": jti,
+        "device_name": device_name or "Unknown Device",
+        "ip": ip,
+        "user_agent": user_agent,
+        "created_at": created_at,
+        "last_used": now,
+    }
+    for field, value in session_data.items():
+        await redis.hset(session_key, field, value)
+    await redis.expire(session_key, ttl)
+    
+    # 加入用户会话集合
+    sessions_set_key = f"user_sessions:{user_id}"
+    await redis.sadd(sessions_set_key, device_id)
+    await redis.expire(sessions_set_key, ttl)
+    
+    logger.info(f"设备会话已存储: user_id={user_id}, device_id={device_id}")
+
+
+async def get_device_session(
+    user_id: str,
+    device_id: str
+) -> Optional[dict]:
+    """
+    获取设备会话信息
+    
+    Args:
+        user_id: 用户 UUID
+        device_id: 设备唯一标识
+        
+    Returns:
+        会话 dict（含 jti, device_name, ip, created_at, last_used），不存在返回 None
+    """
+    redis = get_redis()
+    session_key = f"session:{user_id}:{device_id}"
+    data = await redis.hgetall(session_key)
+    
+    if not data:
+        return None
+    
+    return {
+        "jti": data.get("jti", ""),
+        "device_name": data.get("device_name", ""),
+        "ip": data.get("ip", ""),
+        "user_agent": data.get("user_agent", ""),
+        "created_at": data.get("created_at", ""),
+        "last_used": data.get("last_used", ""),
+    }
+
+
+async def update_device_session(
+    user_id: str,
+    device_id: str,
+    new_jti: str,
+    request: Optional[Request] = None
+) -> None:
+    """
+    更新设备会话元数据（token 轮换后调用）
+    
+    更新 jti、last_used、ip，并刷新 TTL。
+    
+    Args:
+        user_id: 用户 UUID
+        device_id: 设备唯一标识
+        new_jti: 新的 Refresh Token JTI
+        request: FastAPI Request
+    """
+    redis = get_redis()
+    now = datetime.now(timezone.utc).isoformat()
+    session_key = f"session:{user_id}:{device_id}"
+    ttl = REFRESH_TOKEN_EXPIRE_DAYS * 86400
+    
+    # 更新字段
+    await redis.hset(session_key, "jti", new_jti)
+    await redis.hset(session_key, "last_used", now)
+    if request and request.client:
+        await redis.hset(session_key, "ip", request.client.host)
+    await redis.expire(session_key, ttl)
+    
+    # 刷新集合 TTL
+    await redis.expire(f"user_sessions:{user_id}", ttl)
+
+
+async def delete_device_session(
+    user_id: str,
+    device_id: str
+) -> None:
+    """
+    删除设备会话记录
+    
+    Args:
+        user_id: 用户 UUID
+        device_id: 设备唯一标识
+    """
+    redis = get_redis()
+    await redis.delete(f"session:{user_id}:{device_id}")
+    await redis.srem(f"user_sessions:{user_id}", device_id)
+    logger.info(f"设备会话已删除: user_id={user_id}, device_id={device_id}")
+
+
+async def list_user_sessions(
+    user_id: str,
+    current_device_id: Optional[str] = None
+) -> List[dict]:
+    """
+    列出用户所有活跃会话
+    
+    Args:
+        user_id: 用户 UUID
+        current_device_id: 当前请求的设备 ID（用于标记 is_current）
+        
+    Returns:
+        会话信息列表，按 last_used 倒序排列
+    """
+    redis = get_redis()
+    sessions_set_key = f"user_sessions:{user_id}"
+    
+    # 获取所有 device_id
+    device_ids = await redis.smembers(sessions_set_key)
+    if not device_ids:
+        return []
+    
+    sessions = []
+    for device_id in device_ids:
+        if isinstance(device_id, bytes):
+            device_id = device_id.decode("utf-8")
+        
+        session_key = f"session:{user_id}:{device_id}"
+        data = await redis.hgetall(session_key)
+        
+        if data:  # 会话存在（可能已部分过期）
+            sessions.append({
+                "device_id": device_id,
+                "device_name": data.get("device_name", "Unknown Device"),
+                "ip": data.get("ip", ""),
+                "created_at": data.get("created_at", ""),
+                "last_used": data.get("last_used", ""),
+                "is_current": device_id == current_device_id if current_device_id else False,
+            })
+        else:
+            # 会话 Hash 已过期但 Set 中还有，清理
+            await redis.srem(sessions_set_key, device_id)
+    
+    # 按 last_used 倒序排列
+    sessions.sort(key=lambda x: x.get("last_used", ""), reverse=True)
+    return sessions
+
+
+async def enforce_session_limit(
+    user_id: str,
+    max_sessions: int = 5
+) -> None:
+    """
+    强制执行会话数量限制
+    
+    当 user_sessions Set 大小超过 max_sessions 时，
+    按 created_at 排序，删除最旧的会话（包括对应的 refresh token）。
+    
+    Args:
+        user_id: 用户 UUID
+        max_sessions: 最大会话数
+    """
+    redis = get_redis()
+    sessions_set_key = f"user_sessions:{user_id}"
+    
+    device_ids = await redis.smembers(sessions_set_key)
+    if not device_ids or len(device_ids) <= max_sessions:
+        return
+    
+    # 获取所有会话的 created_at
+    sessions_with_time = []
+    for device_id in device_ids:
+        if isinstance(device_id, bytes):
+            device_id = device_id.decode("utf-8")
+        session_key = f"session:{user_id}:{device_id}"
+        created_at = await redis.hget(session_key, "created_at")
+        sessions_with_time.append((device_id, created_at or ""))
+    
+    # 按 created_at 升序排列（最旧的在前）
+    sessions_with_time.sort(key=lambda x: x[1])
+    
+    # 删除最旧的会话，直到数量不超过限制
+    to_remove = len(sessions_with_time) - max_sessions
+    for i in range(to_remove):
+        device_id = sessions_with_time[i][0]
+        # 获取关联的 jti 并撤销 refresh token
+        session_key = f"session:{user_id}:{device_id}"
+        old_jti = await redis.hget(session_key, "jti")
+        if old_jti:
+            await redis.delete(f"refresh_token:{user_id}:{old_jti}")
+        # 删除会话
+        await redis.delete(session_key)
+        await redis.srem(sessions_set_key, device_id)
+        logger.info(f"会话数量超限，已删除最旧会话: device_id={device_id}")
+
+
+def parse_device_name(user_agent: str) -> str:
+    """
+    从 User-Agent 字符串解析可读的设备名称
+    
+    不引入额外依赖，使用正则匹配常见浏览器和操作系统。
+    
+    Args:
+        user_agent: User-Agent 请求头
+        
+    Returns:
+        格式化的设备名，如 "Chrome / Windows"、"Safari / iOS"
+    """
+    if not user_agent:
+        return "Unknown Device"
+    
+    # 操作系统检测
+    os_name = "Unknown"
+    if "Windows" in user_agent:
+        os_name = "Windows"
+    elif "Mac OS" in user_agent:
+        os_name = "macOS"
+    elif "iPhone" in user_agent or "iPad" in user_agent:
+        os_name = "iOS"
+    elif "Android" in user_agent:
+        os_name = "Android"
+    elif "Linux" in user_agent:
+        os_name = "Linux"
+    
+    # 浏览器检测
+    browser = "Unknown"
+    if "Edg" in user_agent:
+        browser = "Edge"
+    elif "Chrome" in user_agent and "Safari" in user_agent:
+        browser = "Chrome"
+    elif "Safari" in user_agent:
+        browser = "Safari"
+    elif "Firefox" in user_agent:
+        browser = "Firefox"
+    
+    return f"{browser} / {os_name}"
+
+
+def extract_request_info(request: Request) -> tuple:
+    """
+    从 FastAPI Request 中提取 IP 和 User-Agent
+    
+    Args:
+        request: FastAPI Request 对象
+        
+    Returns:
+        (ip_address, user_agent) 元组
+    """
+    ip = request.client.host if request.client else ""
+    user_agent = request.headers.get("user-agent", "")
+    return ip, user_agent

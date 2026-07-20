@@ -18,7 +18,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, UploadFile, File
+from fastapi import APIRouter, Depends, UploadFile, File, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,7 +30,7 @@ from app.db.database import get_db
 from app.models.user import User
 from app.schemas.auth import (
     UserRegister, UserLogin, TokenResponse,
-    RefreshTokenRequest, UserUpdate, PasswordChange, UserInfo,
+    RefreshTokenRequest, UserUpdate, PasswordChange, UserInfo, SessionInfo,
 )
 from app.utils.auth_utils import (
     hash_password, verify_password, validate_password_strength,
@@ -38,6 +38,8 @@ from app.utils.auth_utils import (
     get_current_user_id, check_login_attempts, record_login_failure,
     clear_login_attempts, store_refresh_token, verify_refresh_token,
     revoke_refresh_token, revoke_all_refresh_tokens, blacklist_access_token,
+    store_device_session, get_device_session, update_device_session,
+    delete_device_session, list_user_sessions, enforce_session_limit,
     ACCESS_TOKEN_EXPIRE_MINUTES,
 )
 from app.db.redis_client import get_redis
@@ -79,12 +81,13 @@ async def register(data: UserRegister, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/auth/login", summary="用户登录", dependencies=[Depends(rate_limit(endpoint_limit=5))])
-async def login(data: UserLogin, db: AsyncSession = Depends(get_db)):
+async def login(data: UserLogin, request: Request, db: AsyncSession = Depends(get_db)):
     """
     用户登录
     
     校验用户名密码，返回 Access Token + Refresh Token。
     连续 5 次失败锁定 15 分钟。
+    支持设备会话复用：同一设备重复登录时旧 refresh token 立即失效。
     """
     # 检查是否被锁定
     await check_login_attempts(data.username)
@@ -100,6 +103,15 @@ async def login(data: UserLogin, db: AsyncSession = Depends(get_db)):
     # 登录成功，清除失败计数
     await clear_login_attempts(data.username)
     
+    # === 新增：设备会话复用 ===
+    if data.device_id:
+        existing = await get_device_session(user.uuid, data.device_id)
+        if existing:
+            old_jti = existing.get("jti")
+            if old_jti and await verify_refresh_token(user.uuid, old_jti):
+                # 同一设备重复登录 → 撤销旧 refresh_token (rotation)
+                await revoke_refresh_token(user.uuid, old_jti)
+    
     # 生成令牌对
     access_token = create_access_token(user.uuid)
     refresh_token, jti = create_refresh_token(user.uuid)
@@ -107,18 +119,29 @@ async def login(data: UserLogin, db: AsyncSession = Depends(get_db)):
     # 存储 Refresh Token 白名单
     await store_refresh_token(user.uuid, jti)
     
-    logger.info(f"用户登录成功: username={data.username}")
+    # === 新增：存储/更新设备会话 ===
+    if data.device_id:
+        await store_device_session(
+            user.uuid, data.device_id, jti,
+            device_name=data.device_name,
+            request=request,
+        )
+        await enforce_session_limit(user.uuid, max_sessions=5)
+    
+    logger.info(f"用户登录成功: username={data.username}, device_id={data.device_id or 'N/A'}")
     
     return success_response(data=TokenResponse(
         access_token=access_token,
         refresh_token=refresh_token,
         token_type="bearer",
         expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        device_id=data.device_id,
     ).model_dump())
 
 
 @router.post("/auth/logout", summary="用户登出")
 async def logout(
+    request: Request,
     user_id: str = Depends(get_current_user_id),
     authorization: str = Depends(lambda h: h.get("Authorization", "")),
 ):
@@ -126,6 +149,7 @@ async def logout(
     用户登出
     
     将 Access Token 加入黑名单，删除 Refresh Token 白名单。
+    如果提供了 device_id，只撤销当前设备会话；否则撤销所有。
     """
     # 解析当前 Token 的 jti
     token = authorization.split()[-1] if authorization else ""
@@ -139,19 +163,35 @@ async def logout(
         remaining = max(0, int(exp - datetime.now(timezone.utc).timestamp()))
         await blacklist_access_token(jti, remaining)
     
-    # 删除所有 Refresh Token
-    await revoke_all_refresh_tokens(user_id)
+    # 尝试从 body 获取 device_id（可选）
+    device_id = None
+    try:
+        body = await request.json()
+        device_id = body.get("device_id")
+    except Exception:
+        pass
     
-    logger.info(f"用户登出: user_id={user_id}")
+    if device_id:
+        # 只撤销当前设备会话
+        await delete_device_session(user_id, device_id)
+        # 撤销该设备关联的 refresh token
+        if jti:
+            await revoke_refresh_token(user_id, jti)
+    else:
+        # 向后兼容：撤销所有 refresh token
+        await revoke_all_refresh_tokens(user_id)
+    
+    logger.info(f"用户登出: user_id={user_id}, device_id={device_id or 'ALL'}")
     return success_response(message="登出成功")
 
 
 @router.post("/auth/refresh", summary="刷新 Token")
-async def refresh_token(data: RefreshTokenRequest, db: AsyncSession = Depends(get_db)):
+async def refresh_token(data: RefreshTokenRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """
     刷新 Token（Rotation 防重放）
     
     校验 Refresh Token → 签发新令牌对 → 旧 Refresh Token 立即失效。
+    如果提供了 device_id，同步更新设备会话。
     """
     # 解码 Refresh Token
     payload = decode_token(data.refresh_token)
@@ -174,11 +214,16 @@ async def refresh_token(data: RefreshTokenRequest, db: AsyncSession = Depends(ge
     new_refresh, new_jti = create_refresh_token(user_id)
     await store_refresh_token(user_id, new_jti)
     
+    # === 新增：更新设备会话 ===
+    if data.device_id:
+        await update_device_session(user_id, data.device_id, new_jti, request)
+    
     return success_response(data=TokenResponse(
         access_token=new_access,
         refresh_token=new_refresh,
         token_type="bearer",
         expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        device_id=data.device_id,
     ).model_dump())
 
 
@@ -199,6 +244,73 @@ async def get_sse_token(user_id: str = Depends(get_current_user_id)):
     await redis.setex(f"sse_token:{sse_jti}", 60, user_id)
     
     return success_response(data={"token": sse_token, "expires_in": 60})
+
+
+# ========== 设备会话管理 ==========
+
+
+@router.get("/auth/sessions", summary="查看活跃会话列表")
+async def get_sessions(
+    request: Request,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    获取当前用户的所有活跃会话
+    
+    返回各设备名称、IP、活跃时间等信息。
+    """
+    # 获取当前请求的 device_id（用于标记 is_current）
+    current_device_id = request.headers.get("X-Device-Id")
+    
+    sessions = await list_user_sessions(user_id, current_device_id)
+    
+    return success_response(data={"sessions": sessions})
+
+
+@router.delete("/auth/sessions/{device_id}", summary="撤销设备会话")
+async def revoke_session(
+    device_id: str,
+    request: Request,
+    user_id: str = Depends(get_current_user_id),
+    authorization: str = Depends(lambda h: h.get("Authorization", "")),
+):
+    """
+    主动撤销指定设备的会话
+    
+    撤销后该设备的 refresh token 立即失效。
+    如果是当前设备，同时 blacklist 当前 access_token。
+    """
+    # 查找该设备的会话信息
+    session = await get_device_session(user_id, device_id)
+    if not session:
+        raise BusinessError(code=ErrorCode.DEVICE_SESSION_NOT_FOUND, http_status=404)
+    
+    # 撤销关联的 refresh token
+    old_jti = session.get("jti")
+    if old_jti:
+        await revoke_refresh_token(user_id, old_jti)
+    
+    # 删除设备会话记录
+    await delete_device_session(user_id, device_id)
+    
+    # 检查是否是当前设备（通过 X-Device-Id 请求头判断）
+    current_device_id = request.headers.get("X-Device-Id")
+    if current_device_id == device_id:
+        # 同时 blacklist 当前 access_token
+        token = authorization.split()[-1] if authorization else ""
+        if token:
+            payload = decode_token(token)
+            jti = payload.get("jti")
+            if jti:
+                from datetime import datetime, timezone
+                exp = payload.get("exp", 0)
+                remaining = max(0, int(exp - datetime.now(timezone.utc).timestamp()))
+                await blacklist_access_token(jti, remaining)
+        logger.info(f"当前设备会话已撤销: device_id={device_id}")
+        return success_response(message="当前会话已注销")
+    
+    logger.info(f"设备会话已撤销: user_id={user_id}, device_id={device_id}")
+    return success_response(message="会话已撤销")
 
 
 @router.get("/user/me", summary="获取当前用户信息")

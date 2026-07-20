@@ -39,6 +39,8 @@ class UserLogin(BaseModel):
     """用户登录请求"""
     username: str = Field(..., description="用户名")
     password: str = Field(..., description="密码")
+    device_id: Optional[str] = Field(None, description="设备唯一标识（前端生成并持久化）")
+    device_name: Optional[str] = Field(None, description="设备可读名称，如 Chrome on Windows")
 
 
 class TokenResponse(BaseModel):
@@ -47,11 +49,23 @@ class TokenResponse(BaseModel):
     refresh_token: str = Field(..., description="Refresh Token（JWT）")
     token_type: str = Field(default="bearer", description="Token 类型")
     expires_in: int = Field(..., description="Access Token 过期时间（秒）")
+    device_id: Optional[str] = Field(None, description="回传设备标识，前端应持久化存储")
 
 
 class RefreshTokenRequest(BaseModel):
     """Token 刷新请求"""
     refresh_token: str = Field(..., description="Refresh Token")
+    device_id: Optional[str] = Field(None, description="设备唯一标识")
+
+
+class SessionInfo(BaseModel):
+    """会话信息（用于会话列表）"""
+    device_id: str = Field(..., description="设备唯一标识")
+    device_name: Optional[str] = Field(None, description="设备可读名称，如 Chrome on Windows")
+    ip: Optional[str] = Field(None, description="最近登录 IP")
+    created_at: Optional[str] = Field(None, description="会话创建时间（ISO 8601）")
+    last_used: Optional[str] = Field(None, description="最后活跃时间（ISO 8601）")
+    is_current: bool = Field(default=False, description="是否为当前请求设备")
 
 
 class UserUpdate(BaseModel):

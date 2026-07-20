@@ -41,12 +41,14 @@ class ErrorCode:
     # 403xx - 权限不足
     NO_NOTE_ACCESS = 40301              # 无权访问该笔记
     STORAGE_QUOTA_EXCEEDED = 40302      # 上传配额已满
+    SESSION_LIMIT_REACHED = 40303       # 会话数量达到上限
     
     # 404xx - 资源不存在
     NOTE_NOT_FOUND = 40401              # 笔记不存在
     SESSION_NOT_FOUND = 40402           # 会话不存在
     USER_NOT_FOUND = 40403              # 用户不存在
     DOCUMENT_NOT_FOUND = 40404          # 知识库文档不存在
+    DEVICE_SESSION_NOT_FOUND = 40405    # 设备会话不存在
     
     # 409xx - 冲突
     USERNAME_EXISTS = 40901             # 用户名已存在
@@ -75,10 +77,12 @@ _ERROR_MESSAGES = {
     ErrorCode.REFRESH_TOKEN_INVALID: "Refresh Token 无效或已失效",
     ErrorCode.NO_NOTE_ACCESS: "无权访问该笔记",
     ErrorCode.STORAGE_QUOTA_EXCEEDED: "上传配额已满",
+    ErrorCode.SESSION_LIMIT_REACHED: "活跃会话数量达到上限",
     ErrorCode.NOTE_NOT_FOUND: "笔记不存在",
     ErrorCode.SESSION_NOT_FOUND: "会话不存在",
     ErrorCode.USER_NOT_FOUND: "用户不存在",
     ErrorCode.DOCUMENT_NOT_FOUND: "知识库文档不存在",
+    ErrorCode.DEVICE_SESSION_NOT_FOUND: "设备会话不存在",
     ErrorCode.USERNAME_EXISTS: "用户名已存在",
     ErrorCode.IDEMPOTENCY_DUPLICATE: "请求重复提交",
     ErrorCode.GLOBAL_RATE_LIMIT: "请求频率过高，请稍后再试",
