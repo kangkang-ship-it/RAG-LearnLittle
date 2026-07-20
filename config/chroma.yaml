@@ -1,0 +1,27 @@
+# ChromaDB 配置
+chroma:
+  # 持久化存储路径
+  persist_directory: "data/chroma"
+  
+  # 集合配置
+  collections:
+    rag: "rag_collection"         # 知识库文档向量集合
+    notes: "notes_collection"     # 笔记向量集合
+  
+  # 文本切片参数
+  text_splitter:
+    chunk_size: 1000
+    chunk_overlap: 20
+    # 相邻片段余弦相似度阈值，超过此值自动合并
+    merge_similarity_threshold: 0.7
+  
+  # 支持的文件类型
+  supported_file_types:
+    - "application/pdf"
+    - "text/markdown"
+    - "text/plain"
+  
+  # 重排序模型
+  reranker:
+    model_name: "BAAI/bge-reranker-v2-m3"
+    top_k: 3

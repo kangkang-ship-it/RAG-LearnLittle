@@ -1,0 +1,77 @@
+/**
+ * API 端点路径字典
+ * 
+ * 集中管理所有后端 API 路径，与后端路由严格对齐。
+ * 后端路由统一前缀：/api/v1（健康检查除外）
+ * 
+ * 修改后端路由时只需在此处统一修改，前端所有调用方自动同步。
+ */
+
+const API_PREFIX = '/api/v1';
+
+export const endpoints = {
+  // ========== 认证 ==========
+  auth: {
+    register: `${API_PREFIX}/auth/register`,
+    login: `${API_PREFIX}/auth/login`,
+    logout: `${API_PREFIX}/auth/logout`,
+    refresh: `${API_PREFIX}/auth/refresh`,
+    sseToken: `${API_PREFIX}/auth/sse-token`,
+  },
+
+  // ========== 用户 ==========
+  user: {
+    me: `${API_PREFIX}/user/me`,
+    password: `${API_PREFIX}/user/me/password`,
+    avatar: `${API_PREFIX}/file/avatar`,
+  },
+
+  // ========== 笔记 ==========
+  note: {
+    /** POST 创建笔记 / GET 笔记列表 */
+    base: `${API_PREFIX}/note`,
+    /** GET/PUT/DELETE 笔记详情 */
+    detail: (id: string) => `${API_PREFIX}/note/${id}`,
+    search: `${API_PREFIX}/note/search`,
+    batch: `${API_PREFIX}/note/batch`,
+    autocomplete: `${API_PREFIX}/note/autocomplete`,
+    writeAssistant: `${API_PREFIX}/note/write-assistant`,
+  },
+
+  // ========== 聊天 ==========
+  chat: {
+    query: `${API_PREFIX}/chat/query`,
+    rag: `${API_PREFIX}/chat/rag`,
+    sessions: `${API_PREFIX}/chat/sessions`,
+    /** DELETE 删除会话 */
+    sessionDetail: (sessionId: string) => `${API_PREFIX}/chat/sessions/${sessionId}`,
+    /** GET 消息历史（游标分页） */
+    messages: (sessionId: string) => `${API_PREFIX}/chat/${sessionId}/messages`,
+    /** PUT 修改会话标题 */
+    sessionTitle: (sessionId: string) => `${API_PREFIX}/chat/${sessionId}/title`,
+  },
+
+  // ========== 知识库 ==========
+  knowledge: {
+    upload: `${API_PREFIX}/knowledge/upload`,
+    documents: `${API_PREFIX}/knowledge/documents`,
+    /** GET/DELETE 文档详情 */
+    documentDetail: (docId: number) => `${API_PREFIX}/knowledge/documents/${docId}`,
+  },
+
+  // ========== 回顾 ==========
+  review: {
+    today: `${API_PREFIX}/review/today`,
+    /** POST 标记回顾完成 */
+    complete: (reviewId: number) => `${API_PREFIX}/review/${reviewId}/complete`,
+    stats: `${API_PREFIX}/review/stats`,
+  },
+
+  // ========== 模板 ==========
+  template: {
+    /** POST 创建模板 / GET 模板列表 */
+    base: `${API_PREFIX}/note-template`,
+    /** GET/PUT/DELETE 模板详情 */
+    detail: (templateId: number) => `${API_PREFIX}/note-template/${templateId}`,
+  },
+} as const;

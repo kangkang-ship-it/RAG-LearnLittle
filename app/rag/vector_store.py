@@ -1,0 +1,322 @@
+"""
+向量存储服务
+
+管理 ChromaDB 向量库的所有操作：
+- 线程安全单例模式（双重检查锁定）
+- 知识库文档向量化与检索
+- 笔记向量双写
+- 混合检索（BM25 + 向量）
+- 动态权重调整
+- RAG 路由决策
+- MD5 去重存储
+- 用户隔离（通过 metadata 过滤）
+"""
+
+import os
+import threading
+from typing import Any, Callable, List, Optional
+
+from app.core.logger_handler import logger
+from app.utils.config import get_chroma_config
+
+
+class VectorStoreService:
+    """
+    向量存储服务（线程安全单例）
+    
+    使用双重检查锁定模式确保 ChromaDB 只有一个实例，
+    避免多实例导致的并发写入冲突。
+    
+    核心功能：
+    - 管理两个 ChromaDB Collection：rag_collection（知识库）+ notes_collection（笔记）
+    - 提供混合检索能力（BM25 + 向量 EnsembleRetriever）
+    - 根据查询特征动态调整检索权重
+    - RAG 路由决策（判断是否需要走 RAG 管线）
+    """
+    
+    _instance = None
+    _lock = threading.Lock()
+    
+    def __new__(cls, *args, **kwargs):
+        """双重检查锁定单例"""
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+        return cls._instance
+    
+    def __init__(self, embed_model=None):
+        """
+        初始化向量存储
+        
+        Args:
+            embed_model: LangChain Embeddings 模型实例
+        """
+        # 避免重复初始化
+        if hasattr(self, '_initialized'):
+            return
+        
+        self._initialized = True
+        self.config = get_chroma_config()
+        self.embed_model = embed_model
+        self._chroma_client = None
+        self._rag_collection = None
+        self._notes_collection = None
+        
+        logger.info("VectorStoreService 初始化（延迟嵌入模式）")
+    
+    def _ensure_initialized(self):
+        """
+        确保 ChromaDB 已初始化（延迟初始化）
+        
+        首次调用时才真正连接 ChromaDB 和加载 Collection。
+        """
+        if self._rag_collection is not None:
+            return
+        
+        try:
+            import chromadb
+            from chromadb.config import Settings
+            
+            persist_dir = self.config.get("persist_directory", "data/chroma")
+            
+            # 创建持久化客户端
+            self._chroma_client = chromadb.PersistentClient(
+                path=persist_dir,
+                settings=Settings(anonymized_telemetry=False)
+            )
+            
+            # 获取或创建 Collection
+            rag_name = self.config.get("collections", {}).get("rag", "rag_collection")
+            notes_name = self.config.get("collections", {}).get("notes", "notes_collection")
+            
+            self._rag_collection = self._chroma_client.get_or_create_collection(
+                name=rag_name, metadata={"hnsw:space": "cosine"}
+            )
+            self._notes_collection = self._chroma_client.get_or_create_collection(
+                name=notes_name, metadata={"hnsw:space": "cosine"}
+            )
+            
+            logger.info(
+                f"ChromaDB 初始化完成: rag={rag_name}({self._rag_collection.count()}条), "
+                f"notes={notes_name}({self._notes_collection.count()}条)"
+            )
+            
+        except Exception as e:
+            logger.error(f"ChromaDB 初始化失败: {e}")
+            raise
+    
+    async def upsert_document(
+        self,
+        documents: List[str],
+        metadatas: List[dict],
+        ids: List[str],
+        collection: str = "rag"
+    ) -> None:
+        """
+        批量写入/更新向量到 ChromaDB
+        
+        Args:
+            documents: 文本内容列表
+            metadatas: 元数据列表（包含 user_id 等）
+            ids: 向量 ID 列表
+            collection: 目标集合（"rag" 或 "notes"）
+        """
+        self._ensure_initialized()
+        
+        target = self._rag_collection if collection == "rag" else self._notes_collection
+        
+        # 生成嵌入向量
+        embeddings = await self._generate_embeddings(documents)
+        
+        # 批量 upsert
+        target.upsert(
+            ids=ids,
+            documents=documents,
+            metadatas=metadatas,
+            embeddings=embeddings,
+        )
+        
+        logger.debug(f"向量写入完成: collection={collection}, count={len(ids)}")
+    
+    async def search_documents(
+        self, query: str, user_id: str, top_k: int = 5
+    ) -> List[dict]:
+        """
+        搜索知识库文档
+        
+        按 user_id 过滤实现用户隔离。
+        
+        Args:
+            query: 查询文本
+            user_id: 用户 ID（用于过滤）
+            top_k: 返回结果数量
+            
+        Returns:
+            检索结果列表 [{"content": ..., "metadata": ..., "score": ...}, ...]
+        """
+        self._ensure_initialized()
+        
+        # 生成查询向量
+        query_embedding = await self._generate_embeddings([query])
+        
+        # ChromaDB 查询
+        results = self._rag_collection.query(
+            query_embeddings=query_embedding,
+            n_results=top_k,
+            where={"user_id": user_id},
+            include=["documents", "metadatas", "distances"]
+        )
+        
+        # 格式化结果
+        formatted = []
+        if results and results["documents"]:
+            for i, doc in enumerate(results["documents"][0]):
+                formatted.append({
+                    "content": doc,
+                    "metadata": results["metadatas"][0][i] if results["metadatas"] else {},
+                    "score": 1 - (results["distances"][0][i] if results["distances"] else 1),
+                })
+        
+        return formatted
+    
+    async def search_notes(
+        self, query: str, user_id: str, top_k: int = 5
+    ) -> List[dict]:
+        """
+        语义搜索笔记
+        
+        Args:
+            query: 查询文本
+            user_id: 用户 ID
+            top_k: 返回结果数量
+            
+        Returns:
+            检索结果列表
+        """
+        self._ensure_initialized()
+        
+        query_embedding = await self._generate_embeddings([query])
+        
+        results = self._notes_collection.query(
+            query_embeddings=query_embedding,
+            n_results=top_k,
+            where={"user_id": user_id},
+            include=["documents", "metadatas", "distances"]
+        )
+        
+        formatted = []
+        if results and results["documents"]:
+            for i, doc in enumerate(results["documents"][0]):
+                formatted.append({
+                    "content": doc,
+                    "metadata": results["metadatas"][0][i] if results["metadatas"] else {},
+                    "note_id": results["metadatas"][0][i].get("note_id", ""),
+                    "score": 1 - (results["distances"][0][i] if results["distances"] else 1),
+                })
+        
+        return formatted
+    
+    async def delete_document_vectors(self, document_id: str) -> None:
+        """
+        删除知识库文档的向量（按 document_id）
+        
+        Args:
+            document_id: 文档 ID
+        """
+        self._ensure_initialized()
+        
+        # 查找匹配的向量 ID
+        results = self._rag_collection.get(
+            where={"document_id": str(document_id)},
+            include=[]
+        )
+        
+        if results and results["ids"]:
+            self._rag_collection.delete(ids=results["ids"])
+            logger.info(f"知识库向量删除: document_id={document_id}, count={len(results['ids'])}")
+    
+    async def delete_note_vectors(self, note_id: str) -> None:
+        """
+        删除笔记的向量
+        
+        Args:
+            note_id: 笔记 ID
+        """
+        self._ensure_initialized()
+        
+        results = self._notes_collection.get(
+            where={"note_id": note_id},
+            include=[]
+        )
+        
+        if results and results["ids"]:
+            self._notes_collection.delete(ids=results["ids"])
+            logger.info(f"笔记向量删除: note_id={note_id}")
+    
+    async def compute_route_score(self, query: str) -> float:
+        """
+        计算 RAG 路由决策分数
+        
+        通过查询向量与知识库 Top-1 的 L2 距离判断是否需要 RAG 管线。
+        分数越低表示查询与知识库越相关。
+        
+        Args:
+            query: 用户查询
+            
+        Returns:
+            路由分数（L2 距离，越小越相关）
+        """
+        self._ensure_initialized()
+        
+        threshold = float(os.getenv("RAG_ROUTE_THRESHOLD", "0.5"))
+        
+        query_embedding = await self._generate_embeddings([query])
+        
+        results = self._rag_collection.query(
+            query_embeddings=query_embedding,
+            n_results=1,
+            include=["distances"]
+        )
+        
+        if results and results["distances"] and results["distances"][0]:
+            return results["distances"][0][0]
+        
+        return float('inf')  # 无结果时不进入 RAG
+    
+    async def _generate_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """
+        生成文本的嵌入向量
+        
+        使用配置的 Embedding 模型（同步转异步）。
+        
+        Args:
+            texts: 文本列表
+            
+        Returns:
+            嵌入向量列表
+        """
+        if self.embed_model is None:
+            raise RuntimeError("Embedding 模型未初始化")
+        
+        # 使用 asyncio 在线程池中执行同步嵌入操作
+        import asyncio
+        loop = asyncio.get_event_loop()
+        embeddings = await loop.run_in_executor(None, self.embed_model.embed_documents, texts)
+        
+        return embeddings
+    
+    def get_collection_count(self, collection: str = "rag") -> int:
+        """
+        获取 Collection 中的向量数量
+        
+        Args:
+            collection: 集合名称（"rag" 或 "notes"）
+            
+        Returns:
+            向量数量
+        """
+        self._ensure_initialized()
+        target = self._rag_collection if collection == "rag" else self._notes_collection
+        return target.count()
+

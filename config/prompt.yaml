@@ -1,0 +1,11 @@
+# Prompt 模板路径映射
+prompts:
+  main: "prompts/main_prompt.txt"
+  rag_summarize: "prompts/rag_summarize.txt"
+  auto_tag: "prompts/auto_tag_prompt.txt"
+  autocomplete: "prompts/autocomplete_prompt.txt"
+  write_assistant: "prompts/write_assistant_prompt.txt"
+  review_question: "prompts/review_question_prompt.txt"
+  report: "prompts/report_prompt.txt"
+  reorder: "prompts/reorder_prompt.txt"
+  session_title: "prompts/session_title_prompt.txt"

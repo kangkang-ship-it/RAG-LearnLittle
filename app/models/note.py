@@ -1,0 +1,77 @@
+"""
+笔记数据模型
+
+对应 MySQL 表: notes
+存储用户笔记内容，支持软删除、置顶、标签、分类。
+笔记数据同时存在 MySQL（结构化查询）和 ChromaDB（语义检索）中，实现双写模式。
+"""
+
+import uuid
+from datetime import datetime
+
+from sqlalchemy import String, Text, DateTime, Boolean, ForeignKey, JSON, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.models.base import Base
+
+
+class Note(Base):
+    """
+    笔记模型
+    
+    核心设计：
+    - deleted_at 非 NULL 表示软删除（回收站机制）
+    - tags 使用 JSON 字段存储标签列表
+    - is_pinned 控制是否置顶
+    - 向量数据存在 ChromaDB notes_collection 中，通过 note_id 关联
+    
+    关联关系：
+    - 多对一 → User（所属用户）
+    - 一对多 → ReviewRecord（回顾记录）
+    """
+    __tablename__ = "notes"
+    
+    # 主键：UUID
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    
+    # 所属用户 ID（外键，级联删除）
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.uuid", ondelete="CASCADE"), nullable=False, index=True
+    )
+    
+    # 笔记标题
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    
+    # 笔记内容（Markdown 格式）
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    
+    # 标签列表（JSON 数组，如 ["Python", "FastAPI", "RAG"]）
+    tags: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
+    
+    # 分类
+    category: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    
+    # 是否置顶
+    is_pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    
+    # 软删除时间戳（NULL 表示未删除，非 NULL 表示已删除）
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    
+    # 创建时间
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    
+    # 更新时间
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    
+    # ========== 关联关系 ==========
+    user = relationship("User", back_populates="notes")
+    review_records = relationship("ReviewRecord", back_populates="note", cascade="all, delete-orphan")
+    
+    def __repr__(self) -> str:
+        return f"<Note(id={self.id}, title={self.title[:20]})>"
