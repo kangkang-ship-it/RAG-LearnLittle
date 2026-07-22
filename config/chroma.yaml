@@ -10,10 +10,10 @@ chroma:
   
   # 文本切片参数
   text_splitter:
-    chunk_size: 1000
-    chunk_overlap: 20
-    # 相邻片段余弦相似度阈值，超过此值自动合并
-    merge_similarity_threshold: 0.7
+    chunk_size: 1024
+    chunk_overlap: 150
+    # 相邻片段 embedding 余弦相似度阈值，超过此值自动合并
+    merge_similarity_threshold: 0.85
   
   # 支持的文件类型
   supported_file_types:

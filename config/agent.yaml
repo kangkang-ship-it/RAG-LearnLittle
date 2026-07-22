@@ -4,5 +4,33 @@ agent:
   max_iterations: 5
   # 流式输出 chunk 大小（字符数）
   stream_chunk_size: 15
-  # 上下文窗口最大轮数
+  # 上下文窗口最大轮数（滑动窗口）
   max_history_rounds: 20
+
+# Token 预算配置
+token_budget:
+  # 模型上下文窗口大小（token 数）
+  model_context_size: 32768
+  # 系统提示词预留
+  system_prompt: 500
+  # RAG 上下文上限
+  rag_context_max: 2000
+  # 摘要文本上限
+  summary_max: 800
+  # 工具调用预留
+  agent_scratchpad_reserve: 4000
+  # 当前输入估算
+  current_input_estimate: 300
+  # 安全余量
+  safety_margin: 1000
+
+# 记忆压缩配置
+memory_compression:
+  # 触发摘要的消息数阈值
+  summarize_threshold: 40
+  # 两次摘要之间的最小间隔（消息数）
+  min_summary_interval: 20
+  # 摘要最大 token 数
+  summary_max_tokens: 800
+  # 保留最近不压缩的消息数
+  keep_recent: 20

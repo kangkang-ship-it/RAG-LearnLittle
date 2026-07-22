@@ -48,7 +48,9 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
   /** 处理登出 */
   const handleLogout = async () => {
     try {
-      await authApi.logout();
+      // 传入 device_id 精确撤销当前设备会话
+      const deviceId = localStorage.getItem('device_id') || undefined;
+      await authApi.logout(deviceId);
     } catch {
       // 即使后端失败也清除本地状态
     }

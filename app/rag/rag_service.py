@@ -42,18 +42,18 @@ class RagService:
             chat_model: LLM Chat 模型
             rerank_model: CrossEncoder 重排序模型
         """
-        self.vector_store = vector_store
-        self.chat_model = chat_model
-        self.rerank_model = rerank_model
+        self.vector_store = vector_store  # 向量存储服务
+        self.chat_model = chat_model      # LLM Chat 模型
+        self.rerank_model = rerank_model  # CrossEncoder 重排序模型
     
     async def query(
-        self,
-        query_text: str,
-        user_id: str,
-        top_k: int = 3,
-        use_hyde: bool = True,
-        thinking_callback: Optional[Callable] = None,
-    ) -> Dict[str, Any]:
+        self,  # 这个self是指当前类的实例对象
+        query_text: str,    # 用户查询文本
+        user_id: str,       # 用户 ID
+        top_k: int = 3,     # 返回文档数量
+        use_hyde: bool = True,  # 是否使用 HyDE 技术
+        thinking_callback: Optional[Callable] = None,  # 思考过程推送回调函数
+    ) -> Dict[str, Any]:  # 返回值是一个字典，包含上下文、来源和路由分数
         """
         执行完整的 RAG 查询管线
         

@@ -290,13 +290,43 @@ app.mount("/static/avatars", StaticFiles(directory=avatar_dir), name="avatars")
 
 # ========== 启动入口 ==========
 
+def _clean_env(key: str, default: str, valid_values: list = None) -> str:
+    """
+    安全读取环境变量，自动去除内联注释（以 # 开头的内容）
+
+    python-dotenv 不支持行内 # 注释，会把整行当作值。
+    此函数以 # 分割取第一部分，并去除首尾空白。
+
+    Args:
+        key: 环境变量名
+        default: 默认值
+        valid_values: 可选的合法值列表，不在此列表内的值会退回 default
+    """
+    raw = os.getenv(key, default)
+    if not raw:
+        return default
+    # 去除 # 及其后的内容（.env 文件不支持内联注释）
+    value = raw.split("#")[0].strip().lower()
+    if valid_values and value not in valid_values:
+        return default
+    return value
+
+
 if __name__ == "__main__":
     import uvicorn
-    
+
+    # 调试模式：设置环境变量 UVICORN_RELOAD=false 或通过 launch.json 使用 --no-reload
+    # 原因：reload=True 会 fork 子进程，导致 VSCode 断点无法命中
+    reload = os.getenv("UVICORN_RELOAD", "true").lower() not in ("false", "0", "no")
+
+    # 安全解析 LOG_LEVEL（防止内联注释被当作值，如 "DEBUG  # 注释"）
+    _valid_log_levels = ["critical", "error", "warning", "info", "debug", "trace"]
+    log_level = _clean_env("LOG_LEVEL", "info", _valid_log_levels)
+
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info",
+        port=int(_clean_env("PORT", "8000")),
+        reload=reload,
+        log_level=log_level,
     )

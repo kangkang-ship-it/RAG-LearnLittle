@@ -141,19 +141,24 @@ def rate_limit(
     async def dependency(request: Request):
         """
         限流依赖：从请求中获取用户 ID 和 Redis 连接，执行限流检查
+
+        对于已认证用户，使用 user_id 作为限流标识；
+        对于未认证请求（如登录接口），使用客户端 IP 作为限流标识，
+        确保登录防暴力破解限流真正生效。
         """
         # 从 app.state 获取 Redis 连接
         redis_client: aioredis.Redis = request.app.state.redis
-        
-        # 从请求头或查询参数中获取用户 ID
-        # 注意：实际使用时需要通过 JWT 解析获取，这里简化处理
+
+        # 优先使用已认证的 user_id，未认证时回退到客户端 IP
         user_id = getattr(request.state, "user_id", None)
         if user_id is None:
-            # 未认证的请求不做限流（或可以限制更严格）
-            return
-        
+            # 未认证请求使用客户端 IP 作为标识（如登录接口）
+            user_id = request.client.host if request.client else "unknown"
+            # 为未认证用户添加前缀以区分
+            user_id = f"anon:{user_id}"
+
         endpoint = request.url.path
-        
+
         # 执行限流检查
         allowed = await check_rate_limit(
             redis_client=redis_client,
@@ -162,7 +167,7 @@ def rate_limit(
             global_limit=global_limit,
             endpoint_limit=endpoint_limit
         )
-        
+
         if not allowed:
             raise HTTPException(
                 status_code=429,
@@ -171,5 +176,5 @@ def rate_limit(
                     "message": "请求频率过高，请稍后再试"
                 }
             )
-    
+
     return dependency

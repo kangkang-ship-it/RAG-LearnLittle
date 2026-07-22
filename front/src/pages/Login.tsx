@@ -7,7 +7,7 @@
  * 3. 错误提示（用户名不存在、密码错误、账户锁定）
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -27,6 +27,34 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
+  /** 获取或生成设备指纹（持久化到 localStorage） */
+  useEffect(() => {
+    if (!localStorage.getItem('device_id')) {
+      // 生成唯一设备标识：crypto.randomUUID() 或回退方案
+      const id = crypto.randomUUID?.() || `dev_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      localStorage.setItem('device_id', id);
+    }
+  }, []);
+
+  /** 生成设备可读名称（浏览器 + 操作系统） */
+  const getDeviceName = (): string => {
+    const ua = navigator.userAgent;
+    let browser = 'Unknown';
+    if (ua.includes('Firefox')) browser = 'Firefox';
+    else if (ua.includes('Edg')) browser = 'Edge';
+    else if (ua.includes('Chrome')) browser = 'Chrome';
+    else if (ua.includes('Safari')) browser = 'Safari';
+
+    let os = 'Unknown';
+    if (ua.includes('Windows')) os = 'Windows';
+    else if (ua.includes('Mac')) os = 'macOS';
+    else if (ua.includes('Linux')) os = 'Linux';
+    else if (ua.includes('Android')) os = 'Android';
+    else if (ua.includes('iOS') || ua.includes('iPhone') || ua.includes('iPad')) os = 'iOS';
+
+    return `${browser} on ${os}`;
+  };
+
   /** 提交登录 */
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -34,8 +62,12 @@ export default function Login() {
 
     setLoading(true);
     try {
-      // 1. 登录获取 Token
-      const res = await authApi.login({ username, password });
+      // 获取设备信息
+      const deviceId = localStorage.getItem('device_id') || undefined;
+      const deviceName = getDeviceName();
+
+      // 1. 登录获取 Token（携带设备信息）
+      const res = await authApi.login({ username, password, device_id: deviceId, device_name: deviceName });
       const { access_token, refresh_token } = res.data.data;
 
       // 2. 先写入 localStorage，供后续请求拦截器读取
@@ -46,8 +78,8 @@ export default function Login() {
       const userRes = await userApi.getMe();
       const userInfo = userRes.data.data;
 
-      // 4. 保存到 Store（同步 Zustand 状态）
-      login(access_token, refresh_token, userInfo);
+      // 4. 保存到 Store（同步 Zustand 状态 + 持久化 device_id）
+      login(access_token, refresh_token, userInfo, deviceId);
 
       toast.success(t('common.success'));
       navigate('/');

@@ -27,6 +27,11 @@ client.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  // 注入设备标识请求头，供后端设备会话管理使用
+  const deviceId = localStorage.getItem('device_id');
+  if (deviceId) {
+    config.headers['X-Device-Id'] = deviceId;
+  }
   return config;
 });
 

@@ -17,6 +17,10 @@ export const endpoints = {
     logout: `${API_PREFIX}/auth/logout`,
     refresh: `${API_PREFIX}/auth/refresh`,
     sseToken: `${API_PREFIX}/auth/sse-token`,
+    /** GET 获取活跃设备会话列表 */
+    sessions: `${API_PREFIX}/auth/sessions`,
+    /** DELETE 撤销指定设备会话 */
+    sessionRevoke: (deviceId: string) => `${API_PREFIX}/auth/sessions/${deviceId}`,
   },
 
   // ========== 用户 ==========

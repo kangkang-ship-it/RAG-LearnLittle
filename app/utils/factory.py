@@ -1,245 +1,215 @@
 """
 模型工厂模块
 
-提供 Chat / Embedding / Vision 模型的创建和管理。
-内建 Circuit Breaker 状态机，实现 LLM 主备切换：
-- Chat 优先本地 Ollama，不可用时自动降级 DashScope
-- Embedding 固定使用本地 Ollama（不参与切换）
+提供 Chat / Embedding 模型的统一创建入口。
+通过 MODEL_PROVIDER 环境变量一键切换模型提供商，
+支持 DASHSCOPE（阿里云百炼）和 OLLAMA（本地）两种提供商。
+
+切换提供商只需修改 .env 中的 MODEL_PROVIDER 值，无需改动任何代码。
 """
 
 import os
-import time
 from enum import Enum
-from typing import Optional
 
 from app.core.logger_handler import logger
-from app.db.redis_client import get_redis
 
 
-class CircuitState(str, Enum):
-    """熔断器三态"""
-    CLOSED = "CLOSED"           # 正常：使用 Ollama
-    OPEN = "OPEN"               # 熔断：跳过 Ollama，直接用 DashScope
-    HALF_OPEN = "HALF_OPEN"    # 半开：冷却到期，试探 1 次
+# ============================================================
+# 模型提供商枚举
+# ============================================================
+
+class ModelProvider(str, Enum):
+    """模型提供商"""
+    DASHSCOPE = "dashscope"   # 阿里云百炼（云端）
+    OLLAMA = "ollama"         # Ollama（本地）
 
 
-class CircuitBreaker:
+def get_provider() -> ModelProvider:
     """
-    Circuit Breaker 熔断器
-    
-    三态状态机：CLOSED → OPEN → HALF_OPEN → CLOSED/OPEN
-    
-    状态存储在 Redis 中，支持多进程共享。
-    """
-    
-    def __init__(self, user_id: str = "global"):
-        """
-        初始化熔断器
-        
-        Args:
-            user_id: 用户 ID（支持按用户独立熔断）
-        """
-        self.user_id = user_id
-        self.threshold = int(os.getenv("LLM_CIRCUIT_BREAKER_THRESHOLD", "3"))
-        self.cooldown = int(os.getenv("LLM_CIRCUIT_BREAKER_COOLDOWN", "60"))
-    
-    def _state_key(self) -> str:
-        return f"cb:chat:{self.user_id}:state"
-    
-    def _failures_key(self) -> str:
-        return f"cb:chat:{self.user_id}:failures"
-    
-    async def get_state(self) -> CircuitState:
-        """
-        获取当前熔断器状态
-        
-        Returns:
-            当前状态（CLOSED / OPEN / HALF_OPEN）
-        """
-        redis = get_redis()
-        state = await redis.get(self._state_key())
-        if state is None:
-            return CircuitState.CLOSED
-        
-        if state == CircuitState.OPEN:
-            # 检查冷却时间是否到期
-            failures_key = self._failures_key()
-            ttl = await redis.ttl(failures_key)
-            if ttl <= 0:
-                # 冷却到期，进入半开状态
-                await redis.set(self._state_key(), CircuitState.HALF_OPEN)
-                return CircuitState.HALF_OPEN
-        
-        return CircuitState(state)
-    
-    async def record_success(self) -> None:
-        """
-        记录成功调用：重置熔断器到 CLOSED 状态
-        """
-        redis = get_redis()
-        await redis.set(self._state_key(), CircuitState.CLOSED)
-        await redis.delete(self._failures_key())
-        logger.info(f"Circuit Breaker 重置为 CLOSED (user={self.user_id})")
-    
-    async def record_failure(self) -> None:
-        """
-        记录失败调用：累计失败次数，达到阈值则触发熔断
-        
-        失败计数使用 Redis INCR，TTL 与冷却时间绑定。
-        """
-        redis = get_redis()
-        
-        # 累计失败次数
-        failures = await redis.incr(self._failures_key())
-        if failures == 1:
-            await redis.expire(self._failures_key(), self.cooldown)
-        
-        logger.warning(
-            f"Circuit Breaker 失败计数: {failures}/{self.threshold} (user={self.user_id})"
-        )
-        
-        # 达到阈值，触发熔断
-        if failures >= self.threshold:
-            await redis.set(self._state_key(), CircuitState.OPEN)
-            logger.warning(f"Circuit Breaker 触发熔断 → OPEN (user={self.user_id})")
-    
-    async def should_use_fallback(self) -> bool:
-        """
-        判断是否应该使用备用模型（DashScope）
-        
-        Returns:
-            True 表示应使用备用模型
-        """
-        state = await self.get_state()
-        return state in (CircuitState.OPEN, CircuitState.HALF_OPEN)
+    获取当前配置的模型提供商
 
+    读取 MODEL_PROVIDER 环境变量（不区分大小写），
+    未配置或值非法时默认为 DASHSCOPE。
+
+    Returns:
+        ModelProvider 枚举值
+    """
+    raw = os.getenv("MODEL_PROVIDER", "dashscope").strip().lower()
+    try:
+        return ModelProvider(raw)
+    except ValueError:
+        logger.warning(f"未知的 MODEL_PROVIDER: {raw}，回退到 dashscope")
+        return ModelProvider.DASHSCOPE
+
+
+# ============================================================
+# 公开工厂函数
+# ============================================================
 
 def create_chat_model():
     """
     创建 Chat 模型实例
-    
-    根据 LLM_STRATEGY 环境变量决定使用哪个模型提供商：
-    - OLLAMA_FIRST: 优先 Ollama，不可用时降级 DashScope
-    - OLLAMA_ONLY: 仅使用 Ollama
-    - ALIYUN_ONLY: 仅使用 DashScope
-    
+
+    根据 MODEL_PROVIDER 环境变量自动选择对应的 Chat 模型。
+    - dashscope → ChatTongyi（阿里云百炼）
+    - ollama    → ChatOllama（本地）
+
     Returns:
         LangChain ChatModel 实例
     """
-    strategy = os.getenv("LLM_STRATEGY", "OLLAMA_FIRST")
-    
-    if strategy == "ALIYUN_ONLY":
+    provider = get_provider()
+    logger.info(f"创建 Chat 模型 (provider={provider.value})")
+
+    if provider == ModelProvider.DASHSCOPE:
         return _create_dashscope_chat_model()
-    
-    # 默认使用 Ollama
     return _create_ollama_chat_model()
 
 
 def create_embed_model():
     """
     创建 Embedding 模型实例
-    
-    Embedding 不参与主备切换，固定使用 EMBED_PROVIDER 配置的提供商。
-    更改此配置后需要重建 ChromaDB 所有向量。
-    
+
+    根据 MODEL_PROVIDER 环境变量自动选择对应的 Embedding 模型。
+    - dashscope → DashScopeEmbeddings（text-embedding-v3）
+    - ollama    → OllamaEmbeddings
+
+    注意：切换 Embedding 提供商后需要重建 ChromaDB 中的所有向量。
+
     Returns:
         LangChain Embeddings 实例
     """
-    provider = os.getenv("EMBED_PROVIDER", "OLLAMA")
-    
-    if provider == "DASHSCOPE":
+    provider = get_provider()
+    logger.info(f"创建 Embedding 模型 (provider={provider.value})")
+
+    if provider == ModelProvider.DASHSCOPE:
         return _create_dashscope_embed_model()
-    
     return _create_ollama_embed_model()
 
 
-def _create_ollama_chat_model():
-    """
-    创建 Ollama Chat 模型
-    
-    从环境变量读取模型名称和基础 URL。
-    
-    Returns:
-        ChatOllama 实例
-    """
-    from langchain_ollama import ChatOllama
-    
-    model_name = os.getenv("OLLAMA_CHAT_MODEL", "qwen3:latest")
-    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    timeout = int(os.getenv("OLLAMA_TIMEOUT", "30"))
-    
-    logger.info(f"创建 Ollama Chat 模型: {model_name} @ {base_url}")
-    
-    return ChatOllama(
-        model=model_name,
-        base_url=base_url,
-        timeout=timeout,
-        streaming=True,  # 显式启用流式输出
-    )
+# ============================================================
+# DashScope（阿里云百炼）实现
+# ============================================================
+
+# DashScope OpenAI 兼容端点
+DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 
 def _create_dashscope_chat_model():
     """
     创建 DashScope Chat 模型（阿里云百炼）
-    
+
+    使用 ChatOpenAI + DashScope 的 OpenAI 兼容端点，
+    避免 ChatTongyi 对部分新模型的 URL 构造问题。
+
+    环境变量：
+    - DASHSCOPE_API_KEY: API 密钥（必需）
+    - DASHSCOPE_CHAT_MODEL: 模型名称（默认 qwen3-max）
+
     Returns:
-        DashScope ChatModel 实例
+        ChatOpenAI 实例（指向 DashScope 兼容端点）
+    """
+    from langchain_openai import ChatOpenAI
+
+    model_name = os.getenv("DASHSCOPE_CHAT_MODEL", "qwen3-max")
+    api_key = os.getenv("DASHSCOPE_API_KEY", "")
+
+    if not api_key:
+        raise ValueError("DASHSCOPE_API_KEY 未配置，请在 .env 中设置")
+
+    logger.info(f"DashScope Chat 模型: {model_name} @ {DASHSCOPE_BASE_URL}")
+
+    return ChatOpenAI(
+        model=model_name,
+        api_key=api_key,
+        base_url=DASHSCOPE_BASE_URL,
+        streaming=True,
+    )
+
+    """
+    😄
+    """
+def _create_dashscope_embed_model():
+    """
+    创建 DashScope Embedding 模型
+
+    环境变量：
+    - DASHSCOPE_API_KEY: API 密钥（必需）
+    - DASHSCOPE_EMBED_MODEL: 模型名称（默认 text-embedding-v3）
+
+    Returns:
+        DashScopeEmbeddings 实例
     """
     try:
-        from langchain_community.chat_models import ChatTongyi
-        
-        model_name = os.getenv("DASHSCOPE_CHAT_MODEL", "qwen3-max")
+        from langchain_community.embeddings import DashScopeEmbeddings
+
+        model_name = os.getenv("DASHSCOPE_EMBED_MODEL", "text-embedding-v3")
         api_key = os.getenv("DASHSCOPE_API_KEY", "")
-        
-        logger.info(f"创建 DashScope Chat 模型: {model_name}")
-        
-        return ChatTongyi(
+
+        if not api_key:
+            raise ValueError("DASHSCOPE_API_KEY 未配置，请在 .env 中设置")
+
+        logger.info(f"DashScope Embedding 模型: {model_name}")
+
+        return DashScopeEmbeddings(
             model=model_name,
             dashscope_api_key=api_key,
         )
     except ImportError:
-        logger.error("请安装 dashscope: pip install dashscope")
+        logger.error("缺少 dashscope 依赖，请执行: pip install dashscope")
         raise
+
+
+# ============================================================
+# Ollama（本地）实现
+# ============================================================
+
+def _create_ollama_chat_model():
+    """
+    创建 Ollama Chat 模型
+
+    环境变量：
+    - OLLAMA_BASE_URL: Ollama 服务地址（默认 http://localhost:11434）
+    - OLLAMA_CHAT_MODEL: 模型名称（默认 qwen3:latest）
+    - OLLAMA_TIMEOUT: 请求超时秒数（默认 30）
+
+    Returns:
+        ChatOllama 实例
+    """
+    from langchain_ollama import ChatOllama
+
+    model_name = os.getenv("OLLAMA_CHAT_MODEL", "qwen3:latest")
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    timeout = int(os.getenv("OLLAMA_TIMEOUT", "30"))
+
+    logger.info(f"Ollama Chat 模型: {model_name} @ {base_url}")
+
+    return ChatOllama(
+        model=model_name,
+        base_url=base_url,
+        timeout=timeout,
+        streaming=True,
+    )
 
 
 def _create_ollama_embed_model():
     """
     创建 Ollama Embedding 模型
-    
+
+    环境变量：
+    - OLLAMA_BASE_URL: Ollama 服务地址（默认 http://localhost:11434）
+    - OLLAMA_EMBED_MODEL: 模型名称（默认 nomic-embed-text）
+
     Returns:
         OllamaEmbeddings 实例
     """
     from langchain_ollama import OllamaEmbeddings
-    
+
     model_name = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
     base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    
-    logger.info(f"创建 Ollama Embedding 模型: {model_name} @ {base_url}")
-    
+
+    logger.info(f"Ollama Embedding 模型: {model_name} @ {base_url}")
+
     return OllamaEmbeddings(
         model=model_name,
         base_url=base_url,
     )
-
-
-def _create_dashscope_embed_model():
-    """
-    创建 DashScope Embedding 模型
-    
-    Returns:
-        DashScope Embeddings 实例
-    """
-    try:
-        from langchain_community.embeddings import DashScopeEmbeddings
-        
-        api_key = os.getenv("DASHSCOPE_API_KEY", "")
-        
-        logger.info("创建 DashScope Embedding 模型")
-        
-        return DashScopeEmbeddings(
-            model="text-embedding-v3",
-            dashscope_api_key=api_key,
-        )
-    except ImportError:
-        logger.error("请安装 dashscope: pip install dashscope")
-        raise

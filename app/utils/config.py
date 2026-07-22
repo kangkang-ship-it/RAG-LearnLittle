@@ -70,6 +70,26 @@ def get_agent_config() -> dict:
     获取 Agent 配置
     
     Returns:
-        agent.yaml 中的配置字典
+        agent.yaml 中的 agent 配置字典
     """
     return load_yaml("agent.yaml").get("agent", {})
+
+
+def get_token_budget_config() -> dict:
+    """
+    获取 Token 预算配置
+    
+    Returns:
+        agent.yaml 中的 token_budget 配置字典
+    """
+    return load_yaml("agent.yaml").get("token_budget", {})
+
+
+def get_memory_compression_config() -> dict:
+    """
+    获取记忆压缩配置
+    
+    Returns:
+        agent.yaml 中的 memory_compression 配置字典
+    """
+    return load_yaml("agent.yaml").get("memory_compression", {})

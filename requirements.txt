@@ -15,7 +15,7 @@ chromadb>=1.0.0
 # ========== Database ==========
 sqlalchemy[asyncio]>=2.0.40
 aiomysql>=0.2.0
-redis[hiredis]>=5.2.0
+redis[hiredis]>=5.2.0,<6.0.0
 
 # ========== LLM Providers ==========
 dashscope>=1.20.0
@@ -28,12 +28,15 @@ rank-bm25>=0.2.2
 # ========== Auth & Security ==========
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
-bcrypt>=4.2.0
+bcrypt>=4.0.0,<5.0.0
 
 # ========== File Processing ==========
 pymupdf>=1.25.0
 pillow>=11.0.0
 python-magic-bin>=0.4.14; sys_platform == "win32"
+
+# ========== Token Counting ==========
+tiktoken>=0.7.0
 
 # ========== Utilities ==========
 python-dotenv>=1.1.0

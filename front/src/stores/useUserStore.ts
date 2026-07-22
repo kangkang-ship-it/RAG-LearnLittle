@@ -21,12 +21,14 @@ interface UserState {
   userInfo: UserInfo | null;
   /** 是否已登录 */
   isLogin: boolean;
+  /** 设备唯一标识 */
+  deviceId: string;
 
   /**
    * 登录成功 — 保存 Token 和用户信息
    * 双写 localStorage 供 Axios 拦截器使用
    */
-  login: (token: string, refreshToken: string, user: UserInfo) => void;
+  login: (token: string, refreshToken: string, user: UserInfo, deviceId?: string) => void;
 
   /** 登出 — 清除所有状态 */
   logout: () => void;
@@ -45,17 +47,22 @@ export const useUserStore = create<UserState>()(
       refreshToken: '',
       userInfo: null,
       isLogin: false,
+      deviceId: '',
 
-      login: (token, refreshToken, user) => {
+      login: (token, refreshToken, user, deviceId) => {
         // 双写 localStorage
         localStorage.setItem('jwt_token', token);
         localStorage.setItem('jwt_refresh_token', refreshToken);
-        set({ token, refreshToken, userInfo: user, isLogin: true });
+        if (deviceId) {
+          localStorage.setItem('device_id', deviceId);
+        }
+        set({ token, refreshToken, userInfo: user, isLogin: true, deviceId: deviceId || '' });
       },
 
       logout: () => {
         localStorage.removeItem('jwt_token');
         localStorage.removeItem('jwt_refresh_token');
+        // 不清除 device_id，下次登录可复用设备会话
         set({ token: '', refreshToken: '', userInfo: null, isLogin: false });
       },
 

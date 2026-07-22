@@ -173,12 +173,17 @@ async def _process_document_with_progress(
         "message": "正在文本切片...",
     })
 
-    # 调用 TextSplitter 进行切片
+    # 调用 TextSplitter 进行切片（根据文件扩展名选择分割策略）
     chunks = []
+    chunk_metadatas_section = []
     if text_content.strip():
         from app.rag.text_spliter import TextSplitter
         splitter = TextSplitter()
-        chunks = await splitter.async_split_text(text_content)
+        # 根据文件扩展名推导文档类型
+        doc_type = safe_name.rsplit(".", 1)[-1].lower() if "." in safe_name else "txt"
+        chunks, chunk_metadatas_section = await splitter.async_split_with_sections(
+            text_content, doc_type
+        )
     chunk_count = len(chunks)
 
     yield _make_sse_event({
@@ -227,6 +232,11 @@ async def _process_document_with_progress(
                         "document_id": str(doc.id),
                         "filename": safe_name,
                         "chunk_index": i,
+                        # 合并切片器返回的章节元数据
+                        "section_title": (
+                            chunk_metadatas_section[i].get("section_title", "")
+                            if i < len(chunk_metadatas_section) else ""
+                        ),
                     }
                     for i in range(chunk_count)
                 ]

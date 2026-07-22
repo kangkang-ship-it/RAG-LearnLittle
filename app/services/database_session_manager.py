@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logger_handler import logger
 from app.core.failed_response import BusinessError, ErrorCode
-from app.models.chat import ChatSession, ChatMessage
+from app.models.chat import ChatSession, ChatMessage, ChatSummary
 from app.db.redis_client import get_redis, delete_pattern
 
 
@@ -415,4 +415,95 @@ class DatabaseSessionManager:
             await delete_pattern(get_redis(), f"chat:sessions:{user_id}*")
         except Exception:
             pass
+    
+    # ========== 摘要管理 ==========
+    
+    async def get_summary(self, db: AsyncSession, session_id: str) -> Optional[ChatSummary]:
+        """
+        获取会话的里程碑摘要
+        
+        Args:
+            db: 数据库会话
+            session_id: 会话 ID
+            
+        Returns:
+            ChatSummary 对象，不存在时返回 None
+        """
+        result = await db.execute(
+            select(ChatSummary).where(ChatSummary.session_id == session_id)
+        )
+        return result.scalar_one_or_none()
+    
+    async def update_summary(
+        self, db: AsyncSession, session_id: str,
+        summary_text: str, last_message_id: int
+    ) -> ChatSummary:
+        """
+        创建或更新会话摘要（增量更新）
+        
+        Args:
+            db: 数据库会话
+            session_id: 会话 ID
+            summary_text: 新摘要文本
+            last_message_id: 摘要覆盖到的最后一条消息 ID
+            
+        Returns:
+            更新后的 ChatSummary 对象
+        """
+        from app.services.token_budget import TokenCounter
+        
+        # 查询已有摘要
+        result = await db.execute(
+            select(ChatSummary).where(ChatSummary.session_id == session_id)
+        )
+        existing = result.scalar_one_or_none()
+        
+        token_count = TokenCounter.count(summary_text)
+        
+        if existing:
+            # 增量更新
+            existing.summary_text = summary_text
+            existing.last_message_id = last_message_id
+            existing.version += 1
+            existing.token_count = token_count
+        else:
+            # 新建
+            summary = ChatSummary(
+                session_id=session_id,
+                summary_text=summary_text,
+                last_message_id=last_message_id,
+                version=1,
+                token_count=token_count,
+            )
+            db.add(summary)
+            existing = summary
+        
+        await db.flush()
+        logger.debug(
+            f"摘要已更新: session={session_id[:12]}, "
+            f"version={existing.version}, tokens={token_count}"
+        )
+        return existing
+    
+    async def get_all_messages(
+        self, db: AsyncSession, session_id: str
+    ) -> List[ChatMessage]:
+        """
+        获取会话的全部消息（按时间正序）
+        
+        用于记忆压缩场景，需要全量加载。
+        
+        Args:
+            db: 数据库会话
+            session_id: 会话 ID
+            
+        Returns:
+            消息列表（时间升序）
+        """
+        result = await db.execute(
+            select(ChatMessage)
+            .where(ChatMessage.session_id == session_id)
+            .order_by(ChatMessage.created_at.asc())
+        )
+        return list(result.scalars().all())
 

@@ -4,6 +4,7 @@
 对应 MySQL 表:
 - chat_sessions: 聊天会话
 - chat_messages: 聊天消息
+- chat_summaries: 聊天摘要（里程碑压缩）
 
 会话标题支持自动生成（LLM）和手动修改。
 消息使用游标分页，支持幂等写入（idempotency_key 防重复）。
@@ -12,7 +13,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Text, DateTime, Integer, ForeignKey, JSON, func, UniqueConstraint
+from sqlalchemy import String, Text, DateTime, Integer, BigInteger, ForeignKey, JSON, func, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -71,6 +72,10 @@ class ChatSession(Base):
         cascade="all, delete-orphan",
         order_by="ChatMessage.created_at"
     )
+    summary = relationship(
+        "ChatSummary", back_populates="session",
+        uselist=False, cascade="all, delete-orphan"
+    )
     
     def __repr__(self) -> str:
         return f"<ChatSession(id={self.id}, title={self.title[:20]})>"
@@ -122,3 +127,51 @@ class ChatMessage(Base):
     
     def __repr__(self) -> str:
         return f"<ChatMessage(id={self.id}, role={self.role})>"
+
+
+class ChatSummary(Base):
+    """
+    聊天摘要模型
+    
+    每个会话保持一条摘要记录，采用增量更新策略。
+    last_message_id 记录摘要覆盖到的消息位置，
+    下次摘要时仅需处理该 ID 之后的新消息。
+    """
+    __tablename__ = "chat_summaries"
+    
+    # 主键
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    
+    # 所属会话 ID（唯一约束，每个会话仅一条摘要）
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=False, unique=True
+    )
+    
+    # 摘要文本
+    summary_text: Mapped[str] = mapped_column(Text, nullable=False)
+    
+    # 摘要覆盖到的最后一条消息 ID
+    last_message_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    
+    # 摘要版本号（增量更新递增）
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    
+    # 摘要的 token 数（缓存）
+    token_count: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    
+    # 创建时间
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    
+    # 更新时间
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    
+    # ========== 关联关系 ==========
+    session = relationship("ChatSession", back_populates="summary")
+    
+    def __repr__(self) -> str:
+        return f"<ChatSummary(session_id={self.session_id}, version={self.version})>"

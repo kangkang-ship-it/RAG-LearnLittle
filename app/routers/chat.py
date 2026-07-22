@@ -62,7 +62,7 @@ async def chat_query(
     try:
         # 使用独立 session 获取或创建会话（不依赖请求级 db）
         async with async_session_factory() as db:
-            session_id = await chat_service.get_or_create_session(db, user_id, data.session_id)
+            session_id = await chat_service.get_or_create_session(db, user_id, data.session_id)  # 获取Session_id,如果已经存在就返回，否则创建一个新的session
             await db.commit()
         
         # 保存用户消息（使用独立 session + commit，确保持久化）
@@ -119,9 +119,9 @@ async def chat_query(
         
         # 执行 RAG 查询管线
         rag_result = await rag_service.query(
-            query_text=data.message,
+            query_text=data.message,  # 用户最新消息作为查询
             user_id=user_id,
-            top_k=3,
+            top_k=3,  # 默认返回 3 个相关文档
             use_hyde=False,  # 首次不启用 HyDE，减少延迟
         )
         rag_context = rag_result.get("context", "")
@@ -139,6 +139,7 @@ async def chat_query(
     # 构建 system_prompt（注入 RAG 上下文）
     from datetime import datetime
     from app.utils.prompt_loader import load_prompt
+    from app.utils.config import get_agent_config
     
     try:
         system_prompt = load_prompt("main")
@@ -154,40 +155,137 @@ async def chat_query(
             "</reference>"
         )
     
+    # ===== SSE 流式响应生成器 =====
     async def generate_stream():
-        """生成 SSE 流式响应（带 RAG 上下文 + 超时保护）"""
+        """生成 SSE 流式响应（带 RAG 上下文 + Token预算压缩 + 超时保护）"""
         try:
             # 发送思考事件
             if rag_context:
                 yield f"data: {json.dumps({'type': 'thinking', 'stage': 'rag', 'content': f'已从知识库检索到 {len(rag_sources)} 个相关文档'})}\n\n"
             yield f"data: {json.dumps({'type': 'thinking', 'stage': 'processing', 'content': '正在思考...'})}\n\n"
             
-            # 构建消息列表（system prompt 包含 RAG 上下文 + user message）
-            from langchain_core.messages import HumanMessage, SystemMessage
-            messages = [
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=data.message),
-            ]
+            # ===== 对话记忆压缩管线 =====
+            from langchain_core.messages import HumanMessage, AIMessage
+            from app.services.token_budget import TokenBudget, TokenCounter
+            from app.services.memory_compressor import MemoryCompressor, check_and_summarize
+            from app.utils.config import get_token_budget_config, get_memory_compression_config
             
-            # 使用 Ollama 模型流式生成回复（带超时保护）
+            compressed_messages = []
+            try:
+                # Step 1: 创建 Token 预算管理器
+                tb_config = get_token_budget_config()
+                budget = TokenBudget(
+                    model_context_size=tb_config.get("model_context_size", 32768),
+                    system_prompt=tb_config.get("system_prompt", 500),
+                    rag_context_max=tb_config.get("rag_context_max", 2000),
+                    summary_max=tb_config.get("summary_max", 800),
+                    agent_scratchpad_reserve=tb_config.get("agent_scratchpad_reserve", 4000),
+                    current_input_estimate=tb_config.get("current_input_estimate", 300),
+                    safety_margin=tb_config.get("safety_margin", 1000),
+                )
+                
+                # Step 2: 动态分配 token 配额（考虑 RAG 实际消耗）
+                history_quota = budget.allocate(rag_context)
+                
+                # Step 3: 加载全量历史 + 已有摘要
+                mc_config = get_memory_compression_config()
+                
+                async with async_session_factory() as db:
+                    all_msgs = await session_manager.get_all_messages(db, session_id)
+                    summary_obj = await session_manager.get_summary(db, session_id)
+                
+                all_messages = [
+                    {"role": m.role, "content": m.content}
+                    for m in all_msgs
+                ]
+                existing_summary = summary_obj.summary_text if summary_obj else ""
+                
+                # 排除当前消息（已保存为 DB 最后一条），仅将历史消息作为 chat_history
+                # 当前消息通过 Agent 的 input 参数传入，避免重复
+                prev_messages = all_messages[:-1] if all_messages else []
+                
+                # Step 4: 执行压缩（滑动窗口 + 摘要拼接）
+                compressor = MemoryCompressor(budget)
+                compressed_messages, history_tokens = compressor.build_context(
+                    all_messages=prev_messages,
+                    existing_summary=existing_summary,
+                    token_quota=history_quota,
+                )
+                
+                logger.info(
+                    f"记忆压缩完成: session={session_id[:12]}, "
+                    f"total_msgs={len(prev_messages)}, window_msgs={len(compressed_messages)}, "
+                    f"history_tokens={history_tokens}, quota={history_quota}, "
+                    f"has_summary={bool(existing_summary)}"
+                )
+                
+                # Step 5: 异步触发里程碑摘要检查（非阻塞）
+                threshold = mc_config.get("summarize_threshold", 40)
+                min_interval = mc_config.get("min_summary_interval", 20)
+                asyncio.create_task(
+                    check_and_summarize(
+                        chat_model=chat_model,
+                        session_id=session_id,
+                        threshold=threshold,
+                        min_interval=min_interval,
+                    )
+                )
+                
+            except Exception as e:
+                logger.warning(f"记忆压缩管线失败，回退到简单截断: {e}")
+                # 回退：简单截断（保留最近 N 轮）
+                max_rounds = get_agent_config().get("max_history_rounds", 20)
+                try:
+                    recent = await chat_service.session_manager.get_recent_messages(
+                        session_id, limit=max_rounds * 2
+                    )
+                    for msg in recent:
+                        role = msg.get("role", "")
+                        content = msg.get("content", "")
+                        if role == "user":
+                            compressed_messages.append(HumanMessage(content=content))
+                        elif role == "assistant":
+                            compressed_messages.append(AIMessage(content=content))
+                except Exception:
+                    pass
+            
+            # ===== 通过 Agent 生成回答（新 API：messages 格式）=====
+            from app.agent.agent import AgentFactory
+            from app.agent.agent_tools import create_agent_tools
+            
+            agent_config = get_agent_config()
+            tools = create_agent_tools(
+                user_id=user_id,
+                db_session_factory=async_session_factory,
+            )
+            agent, max_iter = AgentFactory.create_agent(
+                chat_model=chat_model,
+                tools=tools,
+                system_prompt=system_prompt,
+                max_iterations=agent_config.get("max_iterations", 5),
+            )
+            
+            # 构建 Agent 输入：compressed_messages + 当前消息（新 API 使用 messages 列表）
+            agent_input = {
+                "messages": [*compressed_messages, HumanMessage(content=data.message)]
+            }
+            
             accumulated = ""
             try:
                 async with asyncio.timeout(LLM_STREAM_TIMEOUT):
-                    async for chunk in chat_model.astream(messages):
-                        # 安全提取 chunk 内容
-                        content = ""
-                        if hasattr(chunk, 'content'):
-                            content = chunk.content or ""
-                        elif isinstance(chunk, dict):
-                            content = chunk.get('content', '')
-                        else:
-                            content = str(chunk)
-                        
-                        if content:
-                            accumulated += content
-                            yield f"data: {json.dumps({'type': 'response', 'content': content})}\n\n"
+                    async for event in agent.astream_events(
+                        agent_input,
+                        config={"recursion_limit": max_iter},
+                        version="v2",
+                    ):
+                        # astream_events 逐 token 输出 LLM 流式事件
+                        if event["event"] == "on_chat_model_stream":
+                            chunk = event["data"].get("chunk")
+                            if chunk and hasattr(chunk, "content") and chunk.content:
+                                accumulated += chunk.content
+                                yield f"data: {json.dumps({'type': 'response', 'content': chunk.content})}\n\n"
             except asyncio.TimeoutError:
-                logger.warning(f"LLM 流式响应超时: session_id={session_id}")
+                logger.warning(f"Agent 响应超时: session_id={session_id}")
                 yield f"data: {json.dumps({'type': 'error', 'content': f'AI 响应超时（{LLM_STREAM_TIMEOUT}秒），请重试'})}\n\n"
                 return
             
@@ -218,7 +316,7 @@ async def chat_query(
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # 禁用 Nginx 缓冲
+            "X-Accel-Buffering": "no",  # 禁用 Nginx 缓冲  #TODO  这为什么要禁用Nginx缓冲
         }
     )
 

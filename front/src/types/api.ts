@@ -27,6 +27,10 @@ export interface UserRegister {
 export interface UserLogin {
   username: string;
   password: string;
+  /** 设备唯一标识（前端生成并持久化） */
+  device_id?: string;
+  /** 设备可读名称，如 Chrome on Windows */
+  device_name?: string;
 }
 
 /** Token 响应 */
@@ -35,6 +39,8 @@ export interface TokenResponse {
   refresh_token: string;
   token_type: string;
   expires_in: number;
+  /** 回传设备标识，前端应持久化存储 */
+  device_id?: string;
 }
 
 /** 用户信息 */
@@ -58,6 +64,16 @@ export interface UserUpdate {
 export interface PasswordChange {
   old_password: string;
   new_password: string;
+}
+
+/** 设备会话信息 */
+export interface SessionInfo {
+  device_id: string;
+  device_name?: string;
+  ip?: string;
+  created_at?: string;
+  last_used?: string;
+  is_current: boolean;
 }
 
 // ========== 笔记 ==========
