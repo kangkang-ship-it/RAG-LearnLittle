@@ -128,7 +128,7 @@ class ChatMessage(Base):
     def __repr__(self) -> str:
         return f"<ChatMessage(id={self.id}, role={self.role})>"
 
-
+# 更新数据库中的每条对话的摘要信息
 class ChatSummary(Base):
     """
     聊天摘要模型
