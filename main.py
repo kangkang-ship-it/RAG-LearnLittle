@@ -58,6 +58,7 @@ class BackgroundInitManager:
         self.vision_model = None
         self.note_service = None
         self.reorder_service = None
+        self.rag_service = None  # RAG 服务（阶段 3 后创建）
     
     async def run(self):
         """
@@ -81,6 +82,10 @@ class BackgroundInitManager:
             await self._init_reranker()
             self.stage3_complete.set()
             logger.info("后台初始化 - 阶段 3 完成 ✓")
+            
+            # 阶段 4: 创建 RagService 实例（依赖 chat_model + vector_store + reranker）
+            await self._init_rag_service()
+            logger.info("后台初始化 - 阶段 4: RagService 完成 ✓")
             
         except Exception as e:
             logger.error(f"后台初始化失败: {e}")
@@ -130,6 +135,25 @@ class BackgroundInitManager:
             logger.warning("重排序模型初始化超时（30s），跳过。知识库重排序功能不可用。")
         except Exception as e:
             logger.warning(f"重排序模型初始化失败: {e}")
+    
+    async def _init_rag_service(self):
+        """创建 RagService 实例（复用，避免每次请求重建）"""
+        try:
+            from app.rag.vector_store import VectorStoreService
+            from app.rag.rag_service import RagService
+            from app.utils.config import get_rag_config
+            
+            vector_store = VectorStoreService()
+            rag_config = get_rag_config()
+            self.rag_service = RagService(
+                vector_store=vector_store,
+                chat_model=self.chat_model,
+                rerank_model=self.reorder_service,
+                enable_summarize=rag_config.get("enable_summarize", False),
+            )
+            logger.info("RagService 实例创建成功")
+        except Exception as e:
+            logger.warning(f"RagService 创建失败: {e}")
 
 
 # 全局后台初始化管理器
@@ -176,6 +200,9 @@ async def lifespan(app: FastAPI):
     
     # ===== 关闭阶段 =====
     logger.info("应用关闭中...")
+    # 关闭共享 httpx 连接池
+    from app.utils.factory import close_shared_http_client
+    await close_shared_http_client()
     await close_redis()
     await close_db()
     logger.info("应用已关闭")

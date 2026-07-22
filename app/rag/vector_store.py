@@ -13,8 +13,10 @@
 """
 
 import os
+import time
+import hashlib
 import threading
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.core.logger_handler import logger
 from app.utils.config import get_chroma_config
@@ -62,6 +64,10 @@ class VectorStoreService:
         self._chroma_client = None
         self._rag_collection = None
         self._notes_collection = None
+        
+        # Embedding 缓存：{text_hash: (embedding, timestamp)}
+        self._embedding_cache: Dict[str, Tuple[List[float], float]] = {}
+        self._embedding_cache_ttl = 300  # 5 分钟 TTL
         
         logger.info("VectorStoreService 初始化（延迟嵌入模式）")
     
@@ -286,9 +292,9 @@ class VectorStoreService:
     
     async def _generate_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
-        生成文本的嵌入向量
+        生成文本的嵌入向量（带 LRU 缓存）
         
-        使用配置的 Embedding 模型（同步转异步）。
+        相同文本在 TTL 内直接返回缓存结果，避免重复 API 调用。
         
         Args:
             texts: 文本列表
@@ -299,12 +305,32 @@ class VectorStoreService:
         if self.embed_model is None:
             raise RuntimeError("Embedding 模型未初始化")
         
-        # 使用 asyncio 在线程池中执行同步嵌入操作
-        import asyncio
-        loop = asyncio.get_event_loop()
-        embeddings = await loop.run_in_executor(None, self.embed_model.embed_documents, texts)
+        now = time.time()
+        results: List[List[float]] = []
+        texts_to_embed: List[str] = []
+        indices_to_fill: List[int] = []  # 需要回填的索引
         
-        return embeddings
+        # 检查缓存
+        for i, text in enumerate(texts):
+            cache_key = hashlib.md5(text.encode()).hexdigest()
+            cached = self._embedding_cache.get(cache_key)
+            if cached and (now - cached[1]) < self._embedding_cache_ttl:
+                results.append(cached[0])
+            else:
+                results.append([])  # 占位
+                texts_to_embed.append(text)
+                indices_to_fill.append(i)
+        
+        # 批量生成未缓存的 embedding
+        if texts_to_embed:
+            new_embeddings = await self.embed_model.aembed_documents(texts_to_embed)
+            for idx, text, emb in zip(indices_to_fill, texts_to_embed, new_embeddings):
+                results[idx] = emb
+                cache_key = hashlib.md5(text.encode()).hexdigest()
+                self._embedding_cache[cache_key] = (emb, now)
+            logger.debug(f"Embedding 缓存命中 {len(texts) - len(texts_to_embed)}/{len(texts)}")
+        
+        return results
     
     def get_collection_count(self, collection: str = "rag") -> int:
         """

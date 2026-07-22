@@ -10,8 +10,57 @@
 
 import os
 from enum import Enum
+from typing import Optional
+
+import httpx
 
 from app.core.logger_handler import logger
+
+
+# ============================================================
+# 共享 HTTP 客户端（Chat 模型连接池复用）
+# ============================================================
+
+_shared_async_client: Optional[httpx.AsyncClient] = None
+
+
+def get_shared_async_client() -> httpx.AsyncClient:
+    """
+    获取模块级共享的 httpx.AsyncClient 实例
+
+    用于 ChatOpenAI 的 http_async_client 参数，实现 TCP/TLS 连接复用。
+    首次调用时创建，后续调用返回同一实例。
+
+    Returns:
+        httpx.AsyncClient 实例
+    """
+    global _shared_async_client
+    if _shared_async_client is None or _shared_async_client.is_closed:
+        _shared_async_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                timeout=120.0,   # 总超时（流式响应需要较长）
+                connect=5.0,     # 连接超时
+            ),
+            limits=httpx.Limits(
+                max_keepalive_connections=20,  # 保持 20 个空闲连接
+                max_connections=100,           # 最大 100 个并发连接
+                keepalive_expiry=60,           # 空闲连接 60 秒后回收
+            ),
+            transport=httpx.AsyncHTTPTransport(retries=1),
+        )
+        logger.debug("共享 httpx.AsyncClient 已创建")
+    return _shared_async_client
+
+
+async def close_shared_http_client():
+    """
+    关闭共享的 httpx.AsyncClient（在应用 shutdown 时调用）
+    """
+    global _shared_async_client
+    if _shared_async_client is not None and not _shared_async_client.is_closed:
+        await _shared_async_client.aclose()
+        _shared_async_client = None
+        logger.debug("共享 httpx.AsyncClient 已关闭")
 
 
 # ============================================================
@@ -123,11 +172,11 @@ def _create_dashscope_chat_model():
         api_key=api_key,
         base_url=DASHSCOPE_BASE_URL,
         streaming=True,
+        http_async_client=get_shared_async_client(),  # 复用连接池
+        request_timeout=120.0,                         # 超时保护
     )
 
-    """
-    😄
-    """
+
 def _create_dashscope_embed_model():
     """
     创建 DashScope Embedding 模型

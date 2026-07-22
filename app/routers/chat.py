@@ -98,49 +98,156 @@ async def chat_query(
         chat_service.generate_and_update_title(session_id, data.message, chat_model)
     )
     
-    # ===== RAG 检索：在生成回答前查询知识库 + 笔记库 =====
-    rag_context = ""
-    rag_sources = []
-    
-    try:
-        # 等待 VectorStore 初始化完成（stage2）
-        await asyncio.wait_for(init_manager.stage2_complete.wait(), timeout=5)
-        
-        from app.rag.vector_store import VectorStoreService
-        from app.rag.rag_service import RagService
-        
-        vector_store = VectorStoreService()
-        reranker = getattr(init_manager, 'reorder_service', None)
-        rag_service = RagService(
-            vector_store=vector_store,
-            chat_model=chat_model,
-            rerank_model=reranker,
-        )
-        
-        # 执行 RAG 查询管线
-        rag_result = await rag_service.query(
-            query_text=data.message,  # 用户最新消息作为查询
-            user_id=user_id,
-            top_k=3,  # 默认返回 3 个相关文档
-            use_hyde=False,  # 首次不启用 HyDE，减少延迟
-        )
-        rag_context = rag_result.get("context", "")
-        rag_sources = rag_result.get("sources", [])
-        
-        if rag_context:
-            logger.info(f"RAG 检索成功: {len(rag_sources)} 个来源, context 长度={len(rag_context)}")
-        else:
-            logger.debug("RAG 检索无结果")
-    except asyncio.TimeoutError:
-        logger.debug("RAG 服务未就绪，跳过知识库检索")
-    except Exception as e:
-        logger.warning(f"RAG 查询失败，跳过: {e}")
-    
-    # 构建 system_prompt（注入 RAG 上下文）
+    # ===== 并行执行 RAG 检索 + 记忆压缩（两者无数据依赖）=====
     from datetime import datetime
     from app.utils.prompt_loader import load_prompt
-    from app.utils.config import get_agent_config
+    from app.utils.config import get_agent_config, get_rag_config
+    from langchain_core.messages import HumanMessage, AIMessage
+    from app.services.token_budget import TokenBudget
+    from app.services.memory_compressor import MemoryCompressor, check_and_summarize
+    from app.utils.config import get_token_budget_config, get_memory_compression_config
     
+    rag_context = ""
+    rag_sources = []
+    compressed_messages = []
+    
+    async def _run_rag():
+        """RAG 检索协程（含路由判断：与知识库无关的查询跳过 RAG）"""
+        nonlocal rag_context, rag_sources
+        try:
+            await asyncio.wait_for(init_manager.stage2_complete.wait(), timeout=5)
+            
+            from app.rag.vector_store import VectorStoreService
+            
+            vector_store = VectorStoreService()
+            
+            # 路由判断：先检查查询与知识库的相关性
+            route_threshold = float(os.getenv("RAG_ROUTE_THRESHOLD", "0.5"))
+            try:
+                route_distance = await vector_store.compute_route_score(data.message)
+                if route_distance > route_threshold:
+                    logger.debug(f"路由判断跳过 RAG: distance={route_distance:.3f} > threshold={route_threshold}")
+                    return  # 与知识库无关，跳过 RAG
+            except Exception as e:
+                logger.debug(f"路由判断失败，继续执行 RAG: {e}")
+            
+            # 复用 init_manager 中的 RagService 实例，避免每次请求重建
+            rag_service = getattr(init_manager, 'rag_service', None)
+            if rag_service is None:
+                from app.rag.rag_service import RagService
+                reranker = getattr(init_manager, 'reorder_service', None)
+                rag_config = get_rag_config()
+                rag_service = RagService(
+                    vector_store=vector_store,
+                    chat_model=chat_model,
+                    rerank_model=reranker,
+                    enable_summarize=rag_config.get("enable_summarize", False),
+                )
+            
+            rag_result = await rag_service.query(
+                query_text=data.message,
+                user_id=user_id,
+                top_k=3,
+                use_hyde=False,
+            )
+            rag_context = rag_result.get("context", "")
+            rag_sources = rag_result.get("sources", [])
+            
+            if rag_context:
+                logger.info(f"RAG 检索成功: {len(rag_sources)} 个来源, context 长度={len(rag_context)}")
+            else:
+                logger.debug("RAG 检索无结果")
+        except asyncio.TimeoutError:
+            logger.debug("RAG 服务未就绪，跳过知识库检索")
+        except Exception as e:
+            logger.warning(f"RAG 查询失败，跳过: {e}")
+    
+    async def _run_memory_compression():
+        """记忆压缩协程"""
+        nonlocal compressed_messages
+        try:
+            tb_config = get_token_budget_config()
+            mc_config = get_memory_compression_config()
+            
+            # 并行执行两次 DB 查询（使用独立 session）
+            async def _get_messages():
+                async with async_session_factory() as db:
+                    return await session_manager.get_all_messages(db, session_id)
+            
+            async def _get_summary():
+                async with async_session_factory() as db:
+                    return await session_manager.get_summary(db, session_id)
+            
+            all_msgs, summary_obj = await asyncio.gather(
+                _get_messages(), _get_summary()
+            )
+            
+            all_messages = [
+                {"role": m.role, "content": m.content}
+                for m in all_msgs
+            ]
+            existing_summary = summary_obj.summary_text if summary_obj else ""
+            prev_messages = all_messages[:-1] if all_messages else []
+            
+            # 先用估算值创建 budget（RAG 上下文长度未知时用默认值）
+            budget = TokenBudget(
+                model_context_size=tb_config.get("model_context_size", 32768),
+                system_prompt=tb_config.get("system_prompt", 500),
+                rag_context_max=tb_config.get("rag_context_max", 2000),
+                summary_max=tb_config.get("summary_max", 800),
+                agent_scratchpad_reserve=tb_config.get("agent_scratchpad_reserve", 4000),
+                current_input_estimate=tb_config.get("current_input_estimate", 300),
+                safety_margin=tb_config.get("safety_margin", 1000),
+            )
+            # 用 RAG 最大配额估算（实际 RAG 结果未就绪时用上限值）
+            history_quota = budget.allocate("" * tb_config.get("rag_context_max", 2000))
+            
+            compressor = MemoryCompressor(budget)
+            compressed_messages, history_tokens = compressor.build_context(
+                all_messages=prev_messages,
+                existing_summary=existing_summary,
+                token_quota=history_quota,
+            )
+            
+            logger.info(
+                f"记忆压缩完成: session={session_id[:12]}, "
+                f"total_msgs={len(prev_messages)}, window_msgs={len(compressed_messages)}, "
+                f"history_tokens={history_tokens}, quota={history_quota}, "
+                f"has_summary={bool(existing_summary)}"
+            )
+            
+            # 异步触发里程碑摘要检查（非阻塞）
+            threshold = mc_config.get("summarize_threshold", 40)
+            min_interval = mc_config.get("min_summary_interval", 20)
+            asyncio.create_task(
+                check_and_summarize(
+                    chat_model=chat_model,
+                    session_id=session_id,
+                    threshold=threshold,
+                    min_interval=min_interval,
+                )
+            )
+        except Exception as e:
+            logger.warning(f"记忆压缩管线失败，回退到简单截断: {e}")
+            max_rounds = get_agent_config().get("max_history_rounds", 20)
+            try:
+                recent = await chat_service.session_manager.get_recent_messages(
+                    session_id, limit=max_rounds * 2
+                )
+                for msg in recent:
+                    role = msg.get("role", "")
+                    content = msg.get("content", "")
+                    if role == "user":
+                        compressed_messages.append(HumanMessage(content=content))
+                    elif role == "assistant":
+                        compressed_messages.append(AIMessage(content=content))
+            except Exception:
+                pass
+    
+    # 并行执行 RAG + 记忆压缩
+    await asyncio.gather(_run_rag(), _run_memory_compression())
+    
+    # 构建 system_prompt（注入 RAG 上下文）
     try:
         system_prompt = load_prompt("main")
         system_prompt = system_prompt.replace("{current_time}", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
@@ -157,137 +264,37 @@ async def chat_query(
     
     # ===== SSE 流式响应生成器 =====
     async def generate_stream():
-        """生成 SSE 流式响应（带 RAG 上下文 + Token预算压缩 + 超时保护）"""
+        """生成 SSE 流式响应（RAG + 记忆压缩已并行完成，直接生成）"""
         try:
             # 发送思考事件
             if rag_context:
                 yield f"data: {json.dumps({'type': 'thinking', 'stage': 'rag', 'content': f'已从知识库检索到 {len(rag_sources)} 个相关文档'})}\n\n"
             yield f"data: {json.dumps({'type': 'thinking', 'stage': 'processing', 'content': '正在思考...'})}\n\n"
             
-            # ===== 对话记忆压缩管线 =====
-            from langchain_core.messages import HumanMessage, AIMessage
-            from app.services.token_budget import TokenBudget, TokenCounter
-            from app.services.memory_compressor import MemoryCompressor, check_and_summarize
-            from app.utils.config import get_token_budget_config, get_memory_compression_config
-            
-            compressed_messages = []
-            try:
-                # Step 1: 创建 Token 预算管理器
-                tb_config = get_token_budget_config()
-                budget = TokenBudget(
-                    model_context_size=tb_config.get("model_context_size", 32768),
-                    system_prompt=tb_config.get("system_prompt", 500),
-                    rag_context_max=tb_config.get("rag_context_max", 2000),
-                    summary_max=tb_config.get("summary_max", 800),
-                    agent_scratchpad_reserve=tb_config.get("agent_scratchpad_reserve", 4000),
-                    current_input_estimate=tb_config.get("current_input_estimate", 300),
-                    safety_margin=tb_config.get("safety_margin", 1000),
-                )
-                
-                # Step 2: 动态分配 token 配额（考虑 RAG 实际消耗）
-                history_quota = budget.allocate(rag_context)
-                
-                # Step 3: 加载全量历史 + 已有摘要
-                mc_config = get_memory_compression_config()
-                
-                async with async_session_factory() as db:
-                    all_msgs = await session_manager.get_all_messages(db, session_id)
-                    summary_obj = await session_manager.get_summary(db, session_id)
-                
-                all_messages = [
-                    {"role": m.role, "content": m.content}
-                    for m in all_msgs
-                ]
-                existing_summary = summary_obj.summary_text if summary_obj else ""
-                
-                # 排除当前消息（已保存为 DB 最后一条），仅将历史消息作为 chat_history
-                # 当前消息通过 Agent 的 input 参数传入，避免重复
-                prev_messages = all_messages[:-1] if all_messages else []
-                
-                # Step 4: 执行压缩（滑动窗口 + 摘要拼接）
-                compressor = MemoryCompressor(budget)
-                compressed_messages, history_tokens = compressor.build_context(
-                    all_messages=prev_messages,
-                    existing_summary=existing_summary,
-                    token_quota=history_quota,
-                )
-                
-                logger.info(
-                    f"记忆压缩完成: session={session_id[:12]}, "
-                    f"total_msgs={len(prev_messages)}, window_msgs={len(compressed_messages)}, "
-                    f"history_tokens={history_tokens}, quota={history_quota}, "
-                    f"has_summary={bool(existing_summary)}"
-                )
-                
-                # Step 5: 异步触发里程碑摘要检查（非阻塞）
-                threshold = mc_config.get("summarize_threshold", 40)
-                min_interval = mc_config.get("min_summary_interval", 20)
-                asyncio.create_task(
-                    check_and_summarize(
-                        chat_model=chat_model,
-                        session_id=session_id,
-                        threshold=threshold,
-                        min_interval=min_interval,
-                    )
-                )
-                
-            except Exception as e:
-                logger.warning(f"记忆压缩管线失败，回退到简单截断: {e}")
-                # 回退：简单截断（保留最近 N 轮）
-                max_rounds = get_agent_config().get("max_history_rounds", 20)
-                try:
-                    recent = await chat_service.session_manager.get_recent_messages(
-                        session_id, limit=max_rounds * 2
-                    )
-                    for msg in recent:
-                        role = msg.get("role", "")
-                        content = msg.get("content", "")
-                        if role == "user":
-                            compressed_messages.append(HumanMessage(content=content))
-                        elif role == "assistant":
-                            compressed_messages.append(AIMessage(content=content))
-                except Exception:
-                    pass
-            
-            # ===== 通过 Agent 生成回答（新 API：messages 格式）=====
-            from app.agent.agent import AgentFactory
-            from app.agent.agent_tools import create_agent_tools
-            
-            agent_config = get_agent_config()
-            tools = create_agent_tools(
-                user_id=user_id,
-                db_session_factory=async_session_factory,
-            )
-            agent, max_iter = AgentFactory.create_agent(
-                chat_model=chat_model,
-                tools=tools,
-                system_prompt=system_prompt,
-                max_iterations=agent_config.get("max_iterations", 5),
-            )
-            
-            # 构建 Agent 输入：compressed_messages + 当前消息（新 API 使用 messages 列表）
-            agent_input = {
-                "messages": [*compressed_messages, HumanMessage(content=data.message)]
-            }
+            # ===== 通过 Agent 生成回答（使用 agent_runner 统一调用链）=====
+            from app.ai_service.agent_runner import execute_agent
             
             accumulated = ""
-            try:
-                async with asyncio.timeout(LLM_STREAM_TIMEOUT):
-                    async for event in agent.astream_events(
-                        agent_input,
-                        config={"recursion_limit": max_iter},
-                        version="v2",
-                    ):
-                        # astream_events 逐 token 输出 LLM 流式事件
-                        if event["event"] == "on_chat_model_stream":
-                            chunk = event["data"].get("chunk")
-                            if chunk and hasattr(chunk, "content") and chunk.content:
-                                accumulated += chunk.content
-                                yield f"data: {json.dumps({'type': 'response', 'content': chunk.content})}\n\n"
-            except asyncio.TimeoutError:
-                logger.warning(f"Agent 响应超时: session_id={session_id}")
-                yield f"data: {json.dumps({'type': 'error', 'content': f'AI 响应超时（{LLM_STREAM_TIMEOUT}秒），请重试'})}\n\n"
-                return
+            async for event in execute_agent(
+                chat_model=chat_model,
+                user_id=user_id,
+                user_message=data.message,
+                system_prompt=system_prompt,
+                compressed_messages=compressed_messages,
+                db_session_factory=async_session_factory,
+                timeout=LLM_STREAM_TIMEOUT,
+            ):
+                event_type = event.get("type", "")
+                
+                if event_type == "response":
+                    accumulated += event.get("content", "")
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                elif event_type == "error":
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    return
+                elif event_type == "stream_done":
+                    break  # 流式完成，跳到后面发送带 RAG 信息的 done 事件
+                # tool_start / tool_end 事件静默跳过（不推送给前端）
             
             # 异步保存 AI 回复到数据库 + Redis（非阻塞，不延迟 done 事件）
             if accumulated:
@@ -346,15 +353,18 @@ async def rag_query(
     try:
         from app.rag.vector_store import VectorStoreService
         from app.rag.rag_service import RagService
+        from app.utils.config import get_rag_config
         
         vector_store = VectorStoreService()
         chat_model = init_manager.chat_model
         reranker = getattr(init_manager, 'reorder_service', None)
+        rag_config = get_rag_config()
         
         rag_service = RagService(
             vector_store=vector_store,
             chat_model=chat_model,
             rerank_model=reranker,
+            enable_summarize=rag_config.get("enable_summarize", False),
         )
         
         result = await rag_service.query(

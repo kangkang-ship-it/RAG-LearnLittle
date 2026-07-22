@@ -7,6 +7,13 @@ agent:
   # 上下文窗口最大轮数（滑动窗口）
   max_history_rounds: 20
 
+# RAG 配置
+rag:
+  # 是否启用 LLM 文档总结（false=轻量截断，延迟低；true=LLM总结，质量高）
+  enable_summarize: true
+  # 截断模式下每篇文档最大字符数
+  truncate_max_chars: 800
+
 # Token 预算配置
 token_budget:
   # 模型上下文窗口大小（token 数）

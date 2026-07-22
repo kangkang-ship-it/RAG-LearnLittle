@@ -33,6 +33,7 @@ class RagService:
         vector_store=None,
         chat_model=None,
         rerank_model=None,
+        enable_summarize: bool = False,
     ):
         """
         初始化 RAG 服务
@@ -41,10 +42,12 @@ class RagService:
             vector_store: 向量存储服务实例
             chat_model: LLM Chat 模型
             rerank_model: CrossEncoder 重排序模型
+            enable_summarize: 是否启用 LLM 文档总结（False 时用截断替代，大幅降低延迟）
         """
         self.vector_store = vector_store  # 向量存储服务
         self.chat_model = chat_model      # LLM Chat 模型
         self.rerank_model = rerank_model  # CrossEncoder 重排序模型
+        self.enable_summarize = enable_summarize  # LLM 总结开关
     
     async def query(
         self,  # 这个self是指当前类的实例对象
@@ -108,9 +111,13 @@ class RagService:
         else:
             all_results = all_results[:top_k]
         
-        # 阶段 5: 分批总结
-        await self._notify(thinking_callback, "summarize", "正在总结文档内容...")
-        context = await self._summarize_documents(query_text, all_results[:top_k])
+        # 阶段 5: 分批总结 / 轻量截断
+        if self.enable_summarize:
+            await self._notify(thinking_callback, "summarize", "正在总结文档内容...")
+            context = await self._summarize_documents(query_text, all_results[:top_k])
+        else:
+            await self._notify(thinking_callback, "summarize", "截取文档内容...")
+            context = self._truncate_documents(all_results[:top_k])
         
         # 构建返回结果
         sources = [
@@ -265,6 +272,32 @@ class RagService:
         except Exception as e:
             logger.warning(f"文档总结失败: {e}")
             return document[:500]
+    
+    def _truncate_documents(self, documents: List[dict], max_chars: int = 800) -> str:
+        """
+        轻量级文档截断（替代 LLM 总结，大幅降低延迟）
+        
+        将每篇文档截断到 max_chars 字符后直接拼接，
+        让 Agent 在生成回答时自行理解原始内容。
+        
+        Args:
+            documents: 检索结果列表
+            max_chars: 每篇文档最大字符数
+            
+        Returns:
+            拼接后的上下文文本
+        """
+        if not documents:
+            return ""
+        
+        parts = []
+        for doc in documents:
+            content = doc.get("content", "")
+            if len(content) > max_chars:
+                content = content[:max_chars]
+            parts.append(content)
+        
+        return "\n\n---\n\n".join(parts)
     
     async def _notify(self, callback: Optional[Callable], event_type: str, message: str) -> None:
         """

@@ -2,6 +2,7 @@
 YAML 配置加载工具
 
 从 config/ 目录加载 YAML 配置文件，提供统一的配置访问接口。
+支持模块级缓存，避免每次请求重复读取磁盘。
 """
 
 import os
@@ -18,13 +19,19 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 # 配置目录
 CONFIG_DIR = BASE_DIR / "config"
 
+# 配置缓存：{filename: data_dict}
+_yaml_cache: dict = {}
 
-def load_yaml(filename: str) -> dict:
+
+def load_yaml(filename: str, use_cache: bool = True) -> dict:
     """
     加载指定的 YAML 配置文件
     
+    首次加载后缓存结果，后续调用直接返回缓存（除非 use_cache=False）。
+    
     Args:
         filename: 配置文件名（如 "chroma.yaml"）
+        use_cache: 是否使用缓存（默认 True）
         
     Returns:
         解析后的字典
@@ -32,6 +39,9 @@ def load_yaml(filename: str) -> dict:
     Raises:
         FileNotFoundError: 配置文件不存在
     """
+    if use_cache and filename in _yaml_cache:
+        return _yaml_cache[filename]
+    
     filepath = CONFIG_DIR / filename
     
     if not filepath.exists():
@@ -42,7 +52,26 @@ def load_yaml(filename: str) -> dict:
         data = yaml.safe_load(f)
     
     logger.debug(f"加载配置文件: {filename}")
-    return data or {}
+    result = data or {}
+    
+    if use_cache:
+        _yaml_cache[filename] = result
+    
+    return result
+
+
+def reload_yaml(filename: str) -> dict:
+    """
+    强制重新加载配置文件（清除缓存）
+    
+    Args:
+        filename: 配置文件名
+        
+    Returns:
+        重新加载后的配置字典
+    """
+    _yaml_cache.pop(filename, None)
+    return load_yaml(filename, use_cache=False)
 
 
 def get_chroma_config() -> dict:
@@ -73,6 +102,23 @@ def get_agent_config() -> dict:
         agent.yaml 中的 agent 配置字典
     """
     return load_yaml("agent.yaml").get("agent", {})
+
+
+def get_rag_config() -> dict:
+    """
+    获取 RAG 配置
+    
+    优先读取环境变量 RAG_ENABLE_SUMMARIZE 覆盖 YAML 配置。
+    
+    Returns:
+        agent.yaml 中的 rag 配置字典
+    """
+    rag_config = load_yaml("agent.yaml").get("rag", {})
+    # 环境变量覆盖
+    env_summarize = os.getenv("RAG_ENABLE_SUMMARIZE")
+    if env_summarize is not None:
+        rag_config["enable_summarize"] = env_summarize.lower() in ("true", "1", "yes")
+    return rag_config
 
 
 def get_token_budget_config() -> dict:
