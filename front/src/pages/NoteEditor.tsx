@@ -112,12 +112,17 @@ export default function NoteEditor() {
         </div>
         <div className="w-40">
           <label className="block text-xs text-[var(--color-text-tertiary)] mb-1">{t('note.category')}</label>
-          <input
-            type="text"
+          <select
             value={category}
             onChange={(e) => setCategory(e.target.value)}
-            className="w-full px-2 py-1 text-sm rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text)]"
-          />
+            className="w-full px-2 py-1 text-sm rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]"
+          >
+            <option value="">未分类</option>
+            <option value="工作">工作</option>
+            <option value="学习">学习</option>
+            <option value="生活">生活</option>
+            <option value="技术">技术</option>
+          </select>
         </div>
         <div className="flex items-end">
           <label className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] cursor-pointer">

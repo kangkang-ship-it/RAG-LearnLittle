@@ -203,9 +203,10 @@ export interface KnowledgeDocumentListResponse {
 
 /** 回顾记录 */
 export interface ReviewRecord {
-  id: number;
+  review_id: number;
   note_id: string;
   note_title: string;
+  note_content?: string;
   next_review_at: string;
   interval_days: number;
   review_count: number;

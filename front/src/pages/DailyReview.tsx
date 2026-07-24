@@ -61,9 +61,9 @@ export default function DailyReview() {
 
     setCompleting(true);
     try {
-      await reviewApi.complete(review.id, quality);
+      await reviewApi.complete(review.review_id, quality);
       // 从列表中移除已回顾项
-      setReviews((prev) => prev.filter((r) => r.id !== review.id));
+      setReviews((prev) => prev.filter((r) => r.review_id !== review.review_id));
       // 更新统计
       setStats((prev) =>
         prev ? { ...prev, completed_today: prev.completed_today + 1, pending_today: Math.max(0, prev.pending_today - 1) } : prev

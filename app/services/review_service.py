@@ -138,9 +138,10 @@ class ReviewService:
             user_id: 用户 ID
             
         Returns:
-            统计信息字典（今日待回顾数、总回顾次数等）
+            统计信息字典（今日待回顾数、总回顾次数、今日已完成、连续天数）
         """
         now = datetime.utcnow()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         
         # 今日待回顾数
         pending_result = await db.execute(
@@ -161,7 +162,40 @@ class ReviewService:
         )
         total_reviews = total_result.scalar() or 0
         
+        # 今日已完成数（reviewed_at 在今天之后的记录数）
+        completed_result = await db.execute(
+            select(func.count()).select_from(ReviewRecord).where(
+                and_(
+                    ReviewRecord.user_id == user_id,
+                    ReviewRecord.reviewed_at >= today_start,
+                )
+            )
+        )
+        completed_today = completed_result.scalar() or 0
+        
+        # 连续天数：从今天往前数，每天有 reviewed_at 记录则累加
+        streak_days = 0
+        check_date = today_start
+        while True:
+            day_end = check_date + timedelta(days=1)
+            streak_result = await db.execute(
+                select(func.count()).select_from(ReviewRecord).where(
+                    and_(
+                        ReviewRecord.user_id == user_id,
+                        ReviewRecord.reviewed_at >= check_date,
+                        ReviewRecord.reviewed_at < day_end,
+                    )
+                )
+            )
+            if (streak_result.scalar() or 0) > 0:
+                streak_days += 1
+                check_date -= timedelta(days=1)
+            else:
+                break
+        
         return {
             "pending_today": pending_count,
             "total_reviews": total_reviews,
+            "completed_today": completed_today,
+            "streak_days": streak_days,
         }

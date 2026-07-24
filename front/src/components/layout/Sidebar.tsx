@@ -66,7 +66,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
         key={item.to}
         to={item.to}
         className={({ isActive }) =>
-          `flex items-center gap-3 px-4 py-2.5 rounded-[var(--radius-md)] transition-colors ${
+          `flex items-center gap-3 ${collapsed ? 'px-0' : 'px-4'} py-2.5 rounded-[var(--radius-md)] transition-colors ${
             isActive
               ? 'bg-[var(--color-accent-bg)] text-[var(--color-accent)]'
               : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-border)] hover:text-[var(--color-text)]'
@@ -120,7 +120,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
       <div className="p-3 border-t border-[var(--color-border)]">
         <button
           onClick={handleLogout}
-          className={`flex items-center gap-3 px-4 py-2.5 rounded-[var(--radius-md)] w-full text-[var(--color-danger)] hover:bg-[var(--color-danger-bg)] transition-colors ${
+          className={`flex items-center gap-3 ${collapsed ? 'px-0' : 'px-4'} py-2.5 rounded-[var(--radius-md)] w-full text-[var(--color-danger)] hover:bg-[var(--color-danger-bg)] transition-colors ${
             collapsed ? 'justify-center' : ''
           }`}
           title={collapsed ? t('nav.logout') : undefined}
