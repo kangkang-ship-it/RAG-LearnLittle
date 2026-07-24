@@ -11,9 +11,10 @@
 import { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Send, Square, Plus } from 'lucide-react';
+import { Send, Square, Plus, User, Bot } from 'lucide-react';
 import { useSSE } from '../hooks/useSSE';
 import { useSessionStore } from '../stores/useSessionStore';
+import { useUserStore } from '../stores/useUserStore';
 import { sessionsApi } from '../api/sessions';
 import { endpoints } from '../api/endpoints';
 import type { ChatMessage } from '../types/api';
@@ -36,6 +37,7 @@ export default function AIChat() {
   const updateLastAssistantMessage = useSessionStore((s) => s.updateLastAssistantMessage);
   const clearCurrentSession = useSessionStore((s) => s.clearCurrentSession);
   const setLastSessionId = useSessionStore((s) => s.setLastSessionId);
+  const userAvatar = useUserStore((s) => s.userInfo?.avatar);
 
   /** 进入会话时加载历史消息，或恢复最近会话 */
   useEffect(() => {
@@ -196,7 +198,12 @@ export default function AIChat() {
         ) : null}
 
         {messages.map((msg) => (
-          <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+          <div key={msg.id} className={`flex items-start gap-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            {msg.role === 'assistant' && (
+              <div className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-[var(--color-accent-bg)]">
+                <Bot size={18} className="text-[var(--color-accent)]" />
+              </div>
+            )}
             <div className={`max-w-[80%] p-3 rounded-[var(--radius-md)] ${
               msg.role === 'user'
                 ? 'bg-[var(--color-accent)] text-white'
@@ -211,6 +218,15 @@ export default function AIChat() {
               )}
               <div className="text-sm whitespace-pre-wrap">{msg.content || '...'}</div>
             </div>
+            {msg.role === 'user' && (
+              <div className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-[var(--color-accent)] overflow-hidden">
+                {userAvatar ? (
+                  <img src={userAvatar} alt="avatar" className="w-8 h-8 rounded-full object-cover" />
+                ) : (
+                  <User size={18} className="text-white" />
+                )}
+              </div>
+            )}
           </div>
         ))}
         <div ref={messagesEndRef} />

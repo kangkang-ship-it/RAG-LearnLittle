@@ -154,6 +154,7 @@ export default function Settings() {
                 onChange={(e) => setNewPassword(e.target.value)}
                 className="w-full px-3 py-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]"
               />
+              <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">密码需8位以上，且必须同时包含字母和数字</p>
             </div>
             <div>
               <label className="block text-sm text-[var(--color-text-secondary)] mb-1">
@@ -165,6 +166,7 @@ export default function Settings() {
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 className="w-full px-3 py-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]"
               />
+              <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">密码需8位以上，且必须同时包含字母和数字</p>
             </div>
             <button
               onClick={handleChangePassword}

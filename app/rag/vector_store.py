@@ -36,6 +36,9 @@ class VectorStoreService:
     - RAG 路由决策（判断是否需要走 RAG 管线）
     """
     
+    # DashScope Embedding API 单次请求最大条数
+    EMBEDDING_BATCH_SIZE = 20
+    
     _instance = None
     _lock = threading.Lock()
     
@@ -321,14 +324,33 @@ class VectorStoreService:
                 texts_to_embed.append(text)
                 indices_to_fill.append(i)
         
-        # 批量生成未缓存的 embedding
+        # 分批生成未缓存的 embedding（DashScope API 单次上限 20 条）
         if texts_to_embed:
-            new_embeddings = await self.embed_model.aembed_documents(texts_to_embed)
+            new_embeddings: List[List[float]] = []
+            batch_size = self.EMBEDDING_BATCH_SIZE
+            total_batches = (len(texts_to_embed) + batch_size - 1) // batch_size
+            
+            for batch_idx in range(total_batches):
+                start = batch_idx * batch_size
+                end = start + batch_size
+                batch_texts = texts_to_embed[start:end]
+                
+                batch_embeddings = await self.embed_model.aembed_documents(batch_texts)
+                new_embeddings.extend(batch_embeddings)
+                
+                logger.debug(
+                    f"Embedding 分批生成: {batch_idx + 1}/{total_batches}, "
+                    f"本批 {len(batch_texts)} 条"
+                )
+            
             for idx, text, emb in zip(indices_to_fill, texts_to_embed, new_embeddings):
                 results[idx] = emb
                 cache_key = hashlib.md5(text.encode()).hexdigest()
                 self._embedding_cache[cache_key] = (emb, now)
-            logger.debug(f"Embedding 缓存命中 {len(texts) - len(texts_to_embed)}/{len(texts)}")
+            logger.debug(
+                f"Embedding 缓存命中 {len(texts) - len(texts_to_embed)}/{len(texts)}, "
+                f"共 {total_batches} 批"
+            )
         
         return results
     

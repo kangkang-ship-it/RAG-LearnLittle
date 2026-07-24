@@ -176,6 +176,21 @@ def create_agent_tools(user_id: str, note_service=None, review_service=None, db_
 
             return "相关笔记:\n" + "\n".join(output)
 
+     # TODO: 未来可以增加一个 send_email 工具，允许 LLM 直接发送邮件通知用户
+    async def send_email(to: str, subject: str, body: str) -> str:
+        """
+        发送邮件
+        当用户明确需要发送邮件功能时LLM可以调用这个工具来发送邮件
+
+        Args:
+            to: 收件人邮箱
+            subject: 邮件主题
+            body: 邮件正文
+        """
+        # 这里可以集成实际的邮件发送服务，如 SMTP、SendGrid 等
+        # 目前仅返回模拟结果
+        return f"邮件已发送至 {to}，主题: {subject}"
+
     return [
         what_time_is_now,
         get_user_info_tools,

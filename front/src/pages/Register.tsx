@@ -101,6 +101,7 @@ export default function Register() {
             minLength={8}
             required
           />
+          <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">密码需8位以上，且必须同时包含字母和数字</p>
         </div>
 
         <div>
@@ -114,6 +115,7 @@ export default function Register() {
             className="w-full px-3 py-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]"
             required
           />
+          <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">密码需8位以上，且必须同时包含字母和数字</p>
         </div>
 
         <button
