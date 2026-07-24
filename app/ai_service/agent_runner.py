@@ -68,10 +68,13 @@ async def execute_agent(
     agent_input = {"messages": messages}
 
     # 4. 流式输出（内含中间件钩子 + 超时保护）
+    # recursion_limit 计算每个节点执行（LLM调用 + 工具执行），而非循环次数
+    # 每次迭代约 2-3 步，乘以 3 留出安全余量
+    recursion_limit = max_iter * 3
     async for event in run_agent_stream(
         agent=agent,
         agent_input=agent_input,
-        config={"recursion_limit": max_iter},
+        config={"recursion_limit": recursion_limit},
         timeout=timeout,
     ):
         yield event

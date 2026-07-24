@@ -11,6 +11,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { UserInfo } from '../types/api';
+import { useSessionStore } from './useSessionStore';
 
 interface UserState {
   /** Access Token（JWT） */
@@ -63,6 +64,8 @@ export const useUserStore = create<UserState>()(
         localStorage.removeItem('jwt_token');
         localStorage.removeItem('jwt_refresh_token');
         // 不清除 device_id，下次登录可复用设备会话
+        // 彻底清理会话状态，防止新用户看到旧用户的会话
+        useSessionStore.getState().resetAll();
         set({ token: '', refreshToken: '', userInfo: null, isLogin: false });
       },
 

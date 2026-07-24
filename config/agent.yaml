@@ -1,7 +1,7 @@
 # Agent 配置
 agent:
-  # 最大迭代次数
-  max_iterations: 5
+  # 最大迭代次数（Agent 循环次数，每次约 2-3 步节点执行）
+  max_iterations: 10
   # 流式输出 chunk 大小（字符数）
   stream_chunk_size: 15
   # 上下文窗口最大轮数（滑动窗口）

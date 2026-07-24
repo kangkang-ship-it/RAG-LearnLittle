@@ -10,6 +10,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { MessageSquare, Trash2, RefreshCw } from 'lucide-react';
 import { sessionsApi } from '../api/sessions';
+import { useSessionStore } from '../stores/useSessionStore';
 import EmptyState from '../components/common/EmptyState';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import type { ChatSession } from '../types/api';
@@ -50,6 +51,11 @@ export default function Sessions() {
     try {
       await sessionsApi.delete(deleteId);
       setSessions(sessions.filter((s) => s.id !== deleteId));
+      // 如果删除的是当前活跃会话，清除 store 中的残留状态
+      const { lastSessionId, clearCurrentSession } = useSessionStore.getState();
+      if (lastSessionId === deleteId) {
+        clearCurrentSession();
+      }
       toast.success('已删除');
     } catch {
       toast.error(t('common.error'));

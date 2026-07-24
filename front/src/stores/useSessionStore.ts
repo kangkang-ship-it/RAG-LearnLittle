@@ -36,6 +36,8 @@ interface SessionState {
   setLoadingMessages: (loading: boolean) => void;
   /** 清空当前会话状态（保留 lastSessionId） */
   clearCurrentSession: () => void;
+  /** 彻底重置所有会话状态（登出时调用） */
+  resetAll: () => void;
 }
 
 export const useSessionStore = create<SessionState>()((set) => ({
@@ -70,4 +72,7 @@ export const useSessionStore = create<SessionState>()((set) => ({
 
   clearCurrentSession: () =>
     set({ currentSessionId: null, lastSessionId: null, messages: [] }),
+
+  resetAll: () =>
+    set({ sessions: [], currentSessionId: null, lastSessionId: null, messages: [], isLoadingMessages: false }),
 }));

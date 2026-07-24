@@ -63,7 +63,17 @@ export default function AIChat() {
         const msgs = res.data?.data?.messages ?? [];
         setMessages(msgs);
       } catch (err) {
-        console.error('[AIChat] 加载历史消息失败:', err);
+        if (!cancelled) {
+          // 404 表示会话已被删除，清除残留状态并回退到空白新对话
+          const status = (err as { response?: { status?: number } })?.response?.status;
+          if (status === 404) {
+            console.warn('[AIChat] 会话不存在(404)，清除残留状态');
+            clearCurrentSession();
+            navigate('/chat', { replace: true });
+          } else {
+            console.error('[AIChat] 加载历史消息失败:', err);
+          }
+        }
       } finally {
         if (!cancelled) setLoadingMessages(false);
       }
