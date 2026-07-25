@@ -12,12 +12,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Plus, Search, FileText, Pin } from 'lucide-react';
+import { toast } from 'sonner';
+import { Plus, Search, FileText, Pin, Trash2, X, CheckSquare } from 'lucide-react';
 import { notesApi } from '../api/notes';
 import { useDebounce } from '../hooks/useDebounce';
 import EmptyState from '../components/common/EmptyState';
 import LoadingSkeleton from '../components/common/LoadingSkeleton';
 import TagBadge from '../components/common/TagBadge';
+import ConfirmDialog from '../components/common/ConfirmDialog';
 import type { Note } from '../types/api';
 
 export default function NoteList() {
@@ -31,6 +33,12 @@ export default function NoteList() {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const debouncedSearch = useDebounce(search, 300);
+
+  // 批量操作状态
+  const [batchMode, setBatchMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // 删除确认弹窗
+  const [deleteTarget, setDeleteTarget] = useState<string | 'batch' | null>(null);
 
   /** 加载笔记列表 */
   const loadNotes = useCallback(async (reset = false) => {
@@ -56,6 +64,51 @@ export default function NoteList() {
 
   const categories = ['', '工作', '学习', '生活', '技术'];
 
+  /** 单条删除笔记 */
+  const handleDelete = async (noteId: string) => {
+    try {
+      await notesApi.delete(noteId);
+      setNotes((prev) => prev.filter((n) => n.id !== noteId));
+      setTotal((prev) => prev - 1);
+      toast.success('删除成功');
+    } catch {
+      toast.error('删除失败');
+    }
+    setDeleteTarget(null);
+  };
+
+  /** 批量删除笔记 */
+  const handleBatchDelete = async () => {
+    if (selectedIds.size === 0) return;
+    try {
+      await notesApi.batch({ note_ids: Array.from(selectedIds), operation: 'delete' });
+      setNotes((prev) => prev.filter((n) => !selectedIds.has(n.id)));
+      setTotal((prev) => prev - selectedIds.size);
+      toast.success(`已删除 ${selectedIds.size} 条笔记`);
+      setSelectedIds(new Set());
+      setBatchMode(false);
+    } catch {
+      toast.error('批量删除失败');
+    }
+    setDeleteTarget(null);
+  };
+
+  /** 切换笔记选中状态 */
+  const toggleSelect = (noteId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(noteId)) next.delete(noteId);
+      else next.add(noteId);
+      return next;
+    });
+  };
+
+  /** 退出批量模式 */
+  const exitBatchMode = () => {
+    setBatchMode(false);
+    setSelectedIds(new Set());
+  };
+
   return (
     <div>
       {/* 顶部操作栏 */}
@@ -63,13 +116,47 @@ export default function NoteList() {
         <h1 className="text-2xl font-heading font-bold text-[var(--color-text)]">
           {t('nav.notes')}
         </h1>
-        <button
-          onClick={() => navigate('/notes/new')}
-          className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] bg-[var(--color-accent)] text-white text-sm hover:opacity-90"
-        >
-          <Plus size={16} />
-          {t('note.create')}
-        </button>
+        <div className="flex items-center gap-2">
+          {batchMode ? (
+            <>
+              <span className="text-sm text-[var(--color-text-secondary)]">
+                已选 {selectedIds.size} 条
+              </span>
+              <button
+                onClick={() => selectedIds.size > 0 && setDeleteTarget('batch')}
+                disabled={selectedIds.size === 0}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-[var(--radius-md)] bg-[var(--color-danger)] text-white text-sm hover:opacity-90 disabled:opacity-50"
+              >
+                <Trash2 size={15} />
+                删除
+              </button>
+              <button
+                onClick={exitBatchMode}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-[var(--radius-md)] border border-[var(--color-border)] text-[var(--color-text-secondary)] text-sm hover:bg-[var(--color-card)]"
+              >
+                <X size={15} />
+                取消
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => setBatchMode(true)}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-[var(--radius-md)] border border-[var(--color-border)] text-[var(--color-text-secondary)] text-sm hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors"
+              >
+                <CheckSquare size={15} />
+                批量
+              </button>
+              <button
+                onClick={() => navigate('/notes/new')}
+                className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] bg-[var(--color-accent)] text-white text-sm hover:opacity-90"
+              >
+                <Plus size={16} />
+                {t('note.create')}
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* 搜索框 */}
@@ -123,9 +210,50 @@ export default function NoteList() {
           {notes.map((note) => (
             <div
               key={note.id}
-              onClick={() => navigate(`/notes/${note.id}`)}
-              className="bg-[var(--color-card)] rounded-[var(--radius-md)] p-4 border border-[var(--color-border)] shadow-card hover:shadow-card-hover cursor-pointer transition-shadow"
+              className={`group relative bg-[var(--color-card)] rounded-[var(--radius-md)] p-4 border shadow-card hover:shadow-card-hover transition-shadow ${
+                selectedIds.has(note.id)
+                  ? 'border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]'
+                  : 'border-[var(--color-border)]'
+              } ${batchMode ? 'cursor-pointer' : 'cursor-pointer'}`}
+              onClick={() => {
+                if (batchMode) {
+                  toggleSelect(note.id);
+                } else {
+                  navigate(`/notes/${note.id}`);
+                }
+              }}
             >
+              {/* 批量模式复选框 */}
+              {batchMode && (
+                <div className="absolute top-3 right-3 z-10">
+                  <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+                    selectedIds.has(note.id)
+                      ? 'bg-[var(--color-accent)] border-[var(--color-accent)]'
+                      : 'border-[var(--color-border)] bg-[var(--color-card)]'
+                  }`}>
+                    {selectedIds.has(note.id) && (
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                        <path d="M2 6l3 3 5-5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* 单条删除按钮（非批量模式时显示） */}
+              {!batchMode && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDeleteTarget(note.id);
+                  }}
+                  className="absolute top-3 right-3 z-10 p-1 rounded text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)] hover:bg-[var(--color-danger-bg)] opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="删除"
+                >
+                  <Trash2 size={14} />
+                </button>
+              )}
+
               <div className="flex items-center gap-2 mb-2">
                 {note.is_pinned && <Pin size={14} className="text-[var(--color-accent)]" />}
                 <h3 className="font-heading font-medium text-[var(--color-text)] truncate">
@@ -163,6 +291,28 @@ export default function NoteList() {
           </button>
         </div>
       )}
+
+      {/* 删除确认弹窗 */}
+      <ConfirmDialog
+        open={deleteTarget !== null && deleteTarget !== 'batch'}
+        title="删除笔记"
+        description="确定要删除这条笔记吗？删除后可在回收站恢复。"
+        confirmLabel="删除"
+        variant="danger"
+        onConfirm={() => deleteTarget && handleDelete(deleteTarget)}
+        onCancel={() => setDeleteTarget(null)}
+      />
+
+      {/* 批量删除确认弹窗 */}
+      <ConfirmDialog
+        open={deleteTarget === 'batch'}
+        title="批量删除"
+        description={`确定要删除选中的 ${selectedIds.size} 条笔记吗？删除后可在回收站恢复。`}
+        confirmLabel={`删除 ${selectedIds.size} 条`}
+        variant="danger"
+        onConfirm={handleBatchDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }

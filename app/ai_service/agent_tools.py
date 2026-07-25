@@ -1,7 +1,7 @@
 """
 Agent 工具集
 
-定义 Agent 可使用的 8 个异步工具：
+定义 Agent 可使用的 9 个异步工具：
 1. what_time_is_now - 获取当前时间
 2. get_user_info_tools - 从 JWT 解析用户信息
 3. search_notes_tool - 语义搜索笔记
@@ -9,7 +9,8 @@ Agent 工具集
 5. get_today_reviews_tool - 获取今日待回顾笔记
 6. mark_reviewed_tool - 标记回顾完成
 7. create_note_tool - 创建新笔记
-8. get_related_notes_tool - 获取关联推荐
+8. update_note_tool - 更新已有笔记
+9. get_related_notes_tool - 获取关联推荐
 """
 
 from datetime import datetime
@@ -65,7 +66,7 @@ def create_agent_tools(user_id: str, note_service=None, review_service=None, db_
 
             output = []
             for note, score in results:
-                output.append(f"[{score:.2f}] {note.title}\n{note.content[:200]}...")
+                output.append(f"[{score:.2f}] ID:{note.id} | {note.title}\n{note.content[:200]}...")
 
             return "\n\n---\n\n".join(output)
 
@@ -153,6 +154,47 @@ def create_agent_tools(user_id: str, note_service=None, review_service=None, db_
             return f"笔记创建成功！ID: {note.id}, 标题: {note.title}"
 
     @tool
+    async def update_note_tool(note_id: str, title: str = None, content: str = None, tags: str = None, category: str = None) -> str:
+        """
+        更新一条已有笔记的内容、标题、标签或分类。
+        只需传入要修改的字段，未传入的字段保持不变。
+
+        Args:
+            note_id: 笔记 ID（可通过 search_notes_tool 获取）
+            title: 新标题（可选）
+            content: 新内容（可选，支持 Markdown）
+            tags: 新标签，逗号分隔（可选）
+            category: 新分类名称（可选）
+        """
+        if not db_session_factory or not note_service:
+            return "服务未初始化"
+
+        from app.schemas.note import NoteUpdate
+
+        update_data = {}
+        if title is not None:
+            update_data["title"] = title
+        if content is not None:
+            update_data["content"] = content
+        if tags is not None:
+            update_data["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
+        if category is not None:
+            update_data["category"] = category
+
+        if not update_data:
+            return "未提供任何要更新的字段"
+
+        async with db_session_factory() as db:
+            try:
+                note = await note_service.update_note(
+                    db, note_id, user_id, NoteUpdate(**update_data)
+                )
+                await db.commit()
+                return f"笔记更新成功！ID: {note.id}, 标题: {note.title}"
+            except Exception as e:
+                return f"笔记更新失败: {str(e)}"
+
+    @tool
     async def get_related_notes_tool(note_title: str, top_k: int = 3) -> str:
         """
         获取与指定标题相关的笔记推荐
@@ -199,5 +241,6 @@ def create_agent_tools(user_id: str, note_service=None, review_service=None, db_
         get_today_reviews_tool,
         mark_reviewed_tool,
         create_note_tool,
+        update_note_tool,
         get_related_notes_tool,
     ]

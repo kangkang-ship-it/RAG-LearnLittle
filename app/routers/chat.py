@@ -274,6 +274,23 @@ async def chat_query(
             # ===== 通过 Agent 生成回答（使用 agent_runner 统一调用链）=====
             from app.ai_service.agent_runner import execute_agent
             
+            # 获取笔记服务和回顾服务（等待阶段 2 完成，最多等待 5 秒）
+            note_service = None
+            review_service = None
+            try:
+                await asyncio.wait_for(init_manager.stage2_complete.wait(), timeout=5)
+                note_service = init_manager.note_service
+                if note_service:
+                    from app.services.review_service import ReviewService
+                    review_service = ReviewService()
+                    logger.debug(f"Agent 工具服务注入成功: note_service={type(note_service).__name__}, review_service=ReviewService")
+                else:
+                    logger.warning("note_service 为 None，笔记相关工具将不可用")
+            except asyncio.TimeoutError:
+                logger.warning("等待 NoteService 初始化超时(5s)，笔记相关工具不可用")
+            except Exception as e:
+                logger.warning(f"获取 Agent 工具服务失败: {e}")
+            
             accumulated = ""
             async for event in execute_agent(
                 chat_model=chat_model,
@@ -282,6 +299,8 @@ async def chat_query(
                 system_prompt=system_prompt,
                 compressed_messages=compressed_messages,
                 db_session_factory=async_session_factory,
+                note_service=note_service,
+                review_service=review_service,
                 timeout=LLM_STREAM_TIMEOUT,
             ):
                 event_type = event.get("type", "")

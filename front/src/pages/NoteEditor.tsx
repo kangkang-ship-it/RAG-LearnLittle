@@ -12,7 +12,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { ArrowLeft, Save } from 'lucide-react';
+import { ArrowLeft, Save, Download } from 'lucide-react';
 import { notesApi } from '../api/notes';
 import TagInput from '../components/common/TagInput';
 import TiptapEditor from '../components/common/TiptapEditor';
@@ -73,6 +73,71 @@ export default function NoteEditor() {
     }
   };
 
+  /** HTML 转 Markdown（简易转换） */
+  const htmlToMarkdown = (html: string): string => {
+    let md = html;
+    // 标题
+    md = md.replace(/<h1[^>]*>(.*?)<\/h1>/gi, '# $1\n');
+    md = md.replace(/<h2[^>]*>(.*?)<\/h2>/gi, '## $1\n');
+    md = md.replace(/<h3[^>]*>(.*?)<\/h3>/gi, '### $1\n');
+    // 粗体/斜体/删除线
+    md = md.replace(/<(strong|b)[^>]*>(.*?)<\/\1>/gi, '**$2**');
+    md = md.replace(/<(em|i)[^>]*>(.*?)<\/\1>/gi, '*$2*');
+    md = md.replace(/<s[^>]*>(.*?)<\/s>/gi, '~~$1~~');
+    // 行内代码
+    md = md.replace(/<code[^>]*>(.*?)<\/code>/gi, '`$1`');
+    // 代码块
+    md = md.replace(/<pre[^>]*><code[^>]*>([\s\S]*?)<\/code><\/pre>/gi, '```\n$1\n```\n');
+    // 引用
+    md = md.replace(/<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi, (_, inner) => {
+      return inner.replace(/<[^>]*>/g, '').split('\n').map((l: string) => `> ${l}`).join('\n') + '\n';
+    });
+    // 无序列表
+    md = md.replace(/<ul[^>]*>([\s\S]*?)<\/ul>/gi, (_, inner) => {
+      return inner.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '- $1\n').trim() + '\n';
+    });
+    // 有序列表
+    md = md.replace(/<ol[^>]*>([\s\S]*?)<\/ol>/gi, (_, inner) => {
+      let idx = 0;
+      return inner.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, () => `${++idx}. $1\n`).trim() + '\n';
+    });
+    // 链接
+    md = md.replace(/<a[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/gi, '[$2]($1)');
+    // 图片
+    md = md.replace(/<img[^>]*src="([^"]*)"[^>]*alt="([^"]*)"[^>]*\/?>/gi, '![$2]($1)');
+    // 分割线
+    md = md.replace(/<hr[^>]*\/?>/gi, '\n---\n');
+    // 段落和换行
+    md = md.replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, '$1\n\n');
+    md = md.replace(/<br[^>]*\/?>/gi, '\n');
+    // 清除剩余 HTML 标签
+    md = md.replace(/<[^>]+>/g, '');
+    // 解码 HTML 实体
+    md = md.replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+    // 清理多余空行
+    md = md.replace(/\n{3,}/g, '\n\n');
+    return md.trim();
+  };
+
+  /** 导出为 Markdown 文件 */
+  const handleExport = () => {
+    if (!title.trim()) {
+      toast.error('标题不能为空');
+      return;
+    }
+    const mdContent = `# ${title}\n\n${htmlToMarkdown(content)}`;
+    const blob = new Blob([mdContent], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${title.replace(/[\\/:*?"<>|]/g, '_')}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast.success('导出成功');
+  };
+
   if (loading) return <LoadingSkeleton />;
 
   return (
@@ -86,13 +151,23 @@ export default function NoteEditor() {
           <ArrowLeft size={18} />
           {t('common.back')}
         </button>
-        <button
-          onClick={handleSave}
-          className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] bg-[var(--color-accent)] text-white text-sm hover:opacity-90"
-        >
-          <Save size={16} />
-          {t('note.save')}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleExport}
+            className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] border border-[var(--color-border)] text-[var(--color-text-secondary)] text-sm hover:bg-[var(--color-accent-bg)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] transition-colors"
+            title="导出为 Markdown 文件"
+          >
+            <Download size={16} />
+            导出
+          </button>
+          <button
+            onClick={handleSave}
+            className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] bg-[var(--color-accent)] text-white text-sm hover:opacity-90"
+          >
+            <Save size={16} />
+            {t('note.save')}
+          </button>
+        </div>
       </div>
 
       {/* 标题输入 */}

@@ -11,13 +11,14 @@
 import { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Send, Square, Plus, User, Bot } from 'lucide-react';
+import { Send, Square, Plus, User, Bot, FileText, X, Search } from 'lucide-react';
 import { useSSE } from '../hooks/useSSE';
 import { useSessionStore } from '../stores/useSessionStore';
 import { useUserStore } from '../stores/useUserStore';
 import { sessionsApi } from '../api/sessions';
+import { notesApi } from '../api/notes';
 import { endpoints } from '../api/endpoints';
-import type { ChatMessage } from '../types/api';
+import type { ChatMessage, Note } from '../types/api';
 
 export default function AIChat() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -30,6 +31,14 @@ export default function AIChat() {
   const [thinkingStages, setThinkingStages] = useState<{ stage: string; content: string }[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // 引用笔记状态
+  const [selectedNotes, setSelectedNotes] = useState<Note[]>([]);
+  const [showNotePicker, setShowNotePicker] = useState(false);
+  const [noteList, setNoteList] = useState<Note[]>([]);
+  const [noteSearch, setNoteSearch] = useState('');
+  const [loadingNotes, setLoadingNotes] = useState(false);
+  const notePickerRef = useRef<HTMLDivElement>(null);
 
   const messages = useSessionStore((s) => s.messages);
   const addMessage = useSessionStore((s) => s.addMessage);
@@ -90,19 +99,78 @@ export default function AIChat() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  /** 点击外部关闭笔记选择面板 */
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (notePickerRef.current && !notePickerRef.current.contains(e.target as Node)) {
+        setShowNotePicker(false);
+      }
+    };
+    if (showNotePicker) document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showNotePicker]);
+
+  /** 打开笔记选择面板时加载笔记列表 */
+  const toggleNotePicker = async () => {
+    if (!showNotePicker) {
+      setShowNotePicker(true);
+      setNoteSearch('');
+      setLoadingNotes(true);
+      try {
+        const res = await notesApi.list({ page: 1, page_size: 100 });
+        setNoteList(res.data?.data?.notes ?? []);
+      } catch (err) {
+        console.error('[AIChat] 加载笔记列表失败:', err);
+      } finally {
+        setLoadingNotes(false);
+      }
+    } else {
+      setShowNotePicker(false);
+    }
+  };
+
+  /** 切换笔记选中状态 */
+  const toggleNote = (note: Note) => {
+    setSelectedNotes((prev) => {
+      const exists = prev.find((n) => n.id === note.id);
+      if (exists) return prev.filter((n) => n.id !== note.id);
+      return [...prev, note];
+    });
+  };
+
+  /** 移除已引用的笔记 */
+  const removeNote = (noteId: string) => {
+    setSelectedNotes((prev) => prev.filter((n) => n.id !== noteId));
+  };
+
+  /** 过滤后的笔记列表 */
+  const filteredNotes = noteList.filter((n) =>
+    n.title.toLowerCase().includes(noteSearch.toLowerCase())
+  );
+
   /** 发送消息 */
   const handleSend = async () => {
     if (!input.trim() || isStreaming) return;
+
+    // 构建发送内容：若有引用笔记，将笔记内容作为上下文附加
+    let messageText = input;
+    if (selectedNotes.length > 0) {
+      const noteContext = selectedNotes
+        .map((n) => `【笔记：${n.title}】\n${n.content}`)
+        .join('\n\n');
+      messageText = `${input}\n\n---\n以下是用户引用的笔记内容，请结合这些内容回答：\n${noteContext}`;
+    }
 
     const userMsg: ChatMessage = {
       id: Date.now(),
       session_id: sessionId || '',
       role: 'user',
-      content: input,
+      content: input, // 气泡中只显示用户原始输入
       created_at: new Date().toISOString(),
     };
     addMessage(userMsg);
     setInput('');
+    setSelectedNotes([]);
     setIsStreaming(true);
     setThinkingStages([]);
 
@@ -121,7 +189,7 @@ export default function AIChat() {
     try {
       await start(
         endpoints.chat.query,
-        { session_id: sessionId, message: input },
+        { session_id: sessionId, message: messageText },
         {
           onThinking: (stage, content) => {
             setThinkingStages((prev) => [...prev, { stage, content }]);
@@ -232,8 +300,88 @@ export default function AIChat() {
         <div ref={messagesEndRef} />
       </div>
 
+      {/* 引用笔记标签 */}
+      {selectedNotes.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {selectedNotes.map((note) => (
+            <span
+              key={note.id}
+              className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-[var(--radius-md)] bg-[var(--color-accent-bg)] text-[var(--color-accent)] border border-[var(--color-accent)]/20"
+            >
+              <FileText size={12} />
+              <span className="max-w-[120px] truncate">{note.title}</span>
+              <button onClick={() => removeNote(note.id)} className="hover:opacity-70">
+                <X size={12} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* 输入区 */}
-      <div className="flex gap-2">
+      <div className="relative flex gap-2">
+        {/* 引用笔记按钮 */}
+        <button
+          onClick={toggleNotePicker}
+          className={`flex-shrink-0 px-3 py-2.5 rounded-[var(--radius-md)] border transition-colors ${
+            showNotePicker || selectedNotes.length > 0
+              ? 'border-[var(--color-accent)] text-[var(--color-accent)] bg-[var(--color-accent-bg)]'
+              : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-accent-bg)] hover:text-[var(--color-accent)]'
+          }`}
+          title="引用笔记"
+        >
+          <FileText size={18} />
+        </button>
+
+        {/* 笔记选择面板 */}
+        {showNotePicker && (
+          <div
+            ref={notePickerRef}
+            className="absolute bottom-full mb-2 left-0 w-72 max-h-64 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-card)] shadow-lg z-10 flex flex-col"
+          >
+            {/* 搜索栏 */}
+            <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)]">
+              <Search size={14} className="text-[var(--color-text-tertiary)]" />
+              <input
+                type="text"
+                value={noteSearch}
+                onChange={(e) => setNoteSearch(e.target.value)}
+                placeholder="搜索笔记..."
+                className="flex-1 text-sm bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-tertiary)] focus:outline-none"
+              />
+            </div>
+            {/* 笔记列表 */}
+            <div className="flex-1 overflow-y-auto">
+              {loadingNotes ? (
+                <div className="text-center py-6 text-sm text-[var(--color-text-tertiary)]">加载中...</div>
+              ) : filteredNotes.length === 0 ? (
+                <div className="text-center py-6 text-sm text-[var(--color-text-tertiary)]">暂无笔记</div>
+              ) : (
+                filteredNotes.map((note) => {
+                  const isSelected = selectedNotes.some((n) => n.id === note.id);
+                  return (
+                    <button
+                      key={note.id}
+                      onClick={() => toggleNote(note)}
+                      className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
+                        isSelected
+                          ? 'bg-[var(--color-accent-bg)] text-[var(--color-accent)]'
+                          : 'text-[var(--color-text)] hover:bg-[var(--color-accent-bg)]'
+                      }`}
+                    >
+                      <FileText size={14} className="flex-shrink-0" />
+                      <span className="truncate">{note.title}</span>
+                      {note.category && (
+                        <span className="ml-auto text-xs text-[var(--color-text-tertiary)] flex-shrink-0">{note.category}</span>
+                      )}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+
         <input
           type="text"
           value={input}

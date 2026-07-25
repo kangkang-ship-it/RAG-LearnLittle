@@ -27,6 +27,8 @@ async def execute_agent(
     system_prompt: str,
     compressed_messages: Optional[List] = None,
     db_session_factory=None,
+    note_service=None,
+    review_service=None,
     timeout: int = 60,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
@@ -41,6 +43,8 @@ async def execute_agent(
         system_prompt: 系统提示词（含 RAG 上下文）
         compressed_messages: 经过 Token 预算压缩的历史消息列表
         db_session_factory: 数据库会话工厂（供工具使用）
+        note_service: 笔记服务实例（供笔记相关工具使用）
+        review_service: 回顾服务实例（供回顾相关工具使用）
         timeout: 超时秒数
 
     Yields:
@@ -48,9 +52,11 @@ async def execute_agent(
     """
     agent_config = get_agent_config()
 
-    # 1. 创建工具集
+    # 1. 创建工具集（注入笔记服务和回顾服务）
     tools = create_agent_tools(
         user_id=user_id,
+        note_service=note_service,
+        review_service=review_service,
         db_session_factory=db_session_factory,
     )
 

@@ -123,8 +123,35 @@ async def batch_operation(
     db: AsyncSession = Depends(get_db),
 ):
     """批量操作笔记（删除/置顶/取消置顶/移动分类）"""
-    # TODO: 实现批量操作逻辑
-    return success_response(message=f"批量 {data.operation} 操作完成，共 {len(data.note_ids)} 篇")
+    note_service = _get_note_service()
+    
+    success_count = 0
+    errors = []
+    
+    for note_id in data.note_ids:
+        try:
+            if data.operation == 'delete':
+                await note_service.delete_note(db, note_id, user_id)
+            elif data.operation == 'pin':
+                note = await note_service.get_note(db, note_id, user_id)
+                note.is_pinned = True
+            elif data.operation == 'unpin':
+                note = await note_service.get_note(db, note_id, user_id)
+                note.is_pinned = False
+            elif data.operation == 'move':
+                note = await note_service.get_note(db, note_id, user_id)
+                note.category = data.target_category
+            success_count += 1
+        except Exception as e:
+            errors.append(f"{note_id}: {str(e)}")
+    
+    await db.flush()
+    
+    if errors:
+        from app.core.logger_handler import logger
+        logger.warning(f"批量操作部分失败: operation={data.operation}, errors={errors}")
+    
+    return success_response(message=f"批量 {data.operation} 操作完成，成功 {success_count} 篇")
 
 
 @router.post("/note/autocomplete", summary="AI 内联补全")
