@@ -6,6 +6,8 @@ agent:
   stream_chunk_size: 15
   # 上下文窗口最大轮数（滑动窗口）
   max_history_rounds: 20
+  # 连续工具调用上限（无回复产出时强制终止，防止循环调用）
+  max_consecutive_tool_calls: 6
 
 # Plan-and-Execute 配置
 plan_execute:

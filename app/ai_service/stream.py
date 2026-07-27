@@ -21,6 +21,7 @@ async def run_agent_stream(
     config: Dict[str, Any],
     timeout: int = 60,
     middleware=None,
+    max_consecutive_tool_calls: int = 6,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     执行 Agent 并逐 token 产出事件字典
@@ -31,6 +32,7 @@ async def run_agent_stream(
         config: 运行配置，如 {"recursion_limit": max_iter}
         timeout: 超时秒数（默认 60）
         middleware: AgentMiddleware 实例（默认使用 default_middleware）
+        max_consecutive_tool_calls: 连续工具调用上限（无 response 产出时强制终止）
 
     Yields:
         事件字典，类型由 type 字段区分：
@@ -43,6 +45,7 @@ async def run_agent_stream(
     mw = middleware or default_middleware
     accumulated = ""
     tool_start_times: Dict[str, float] = {}
+    consecutive_tool_calls = 0  # 连续工具调用计数（无 response 产出时递增）
 
     # 触发 before_agent 钩子
     messages = agent_input.get("messages", [])
@@ -66,13 +69,25 @@ async def run_agent_stream(
                     chunk = event["data"].get("chunk")
                     if chunk and hasattr(chunk, "content") and chunk.content:
                         accumulated += chunk.content
+                        consecutive_tool_calls = 0  # 有文本产出，重置计数
                         yield {"type": "response", "content": chunk.content}
 
                 # ---- 工具调用开始 ----
                 elif event_type == "on_tool_start":
                     tool_name = event.get("name", "unknown")
+                    consecutive_tool_calls += 1
+                    # 循环检测：连续工具调用超过上限且无任何文本产出
+                    if consecutive_tool_calls > max_consecutive_tool_calls:
+                        logger.warning(
+                            f"Agent 循环检测: 连续 {consecutive_tool_calls} 次工具调用无回复，强制终止"
+                        )
+                        yield {
+                            "type": "error",
+                            "content": "抱歉，我在处理这个问题时遇到了困难（工具调用循环），请尝试换一种方式提问。",
+                        }
+                        return
                     tool_start_times[tool_name] = time.time()
-                    logger.debug(f"工具调用开始: {tool_name}")
+                    logger.debug(f"工具调用开始: {tool_name} (连续第{consecutive_tool_calls}次)")
                     await mw.trigger("before_tool", {"tool_name": tool_name})
                     yield {"type": "tool_start", "name": tool_name}
 
