@@ -254,11 +254,27 @@ export interface NoteTemplateUpdate {
 
 /** 聊天 SSE 消息 */
 export interface ChatSSEMessage {
-  type: 'thinking' | 'response' | 'done' | 'error';
+  type: 'thinking' | 'response' | 'done' | 'error'
+       | 'plan_start' | 'plan_step' | 'plan_step_start'
+       | 'plan_step_end' | 'plan_synthesize' | 'plan_complete'
+       | 'plan_fallback'
+       | 'tool_start' | 'tool_end';
   stage?: string;
   content?: string;
   details?: Record<string, unknown>;
   session_id?: string;
+  // Plan-and-Execute 扩展字段
+  goal?: string;
+  total_steps?: number;
+  completed_steps?: number;
+  step?: number;
+  action?: string;
+  status?: 'pending' | 'running' | 'completed' | 'failed';
+  result?: string;
+  reason?: string;
+  // 工具调用字段
+  name?: string;
+  duration_ms?: number;
 }
 
 /** 知识库 SSE 消息 */

@@ -22,6 +22,17 @@ interface SSECallbacks {
   onError?: (message: string) => void;
   /** 知识库进度事件 */
   onKnowledgeProgress?: (data: KnowledgeSSEMessage) => void;
+  // Plan-and-Execute 事件回调
+  onPlanStart?: (goal: string, totalSteps: number) => void;
+  onPlanStep?: (step: number, action: string, status: string) => void;
+  onPlanStepStart?: (step: number, action: string) => void;
+  onPlanStepEnd?: (step: number, result: string) => void;
+  onPlanSynthesize?: () => void;
+  onPlanComplete?: (totalSteps: number, completedSteps: number) => void;
+  onPlanFallback?: (reason: string) => void;
+  // 工具调用事件回调
+  onToolStart?: (name: string) => void;
+  onToolEnd?: (name: string, durationMs?: number) => void;
 }
 
 export function useSSE() {
@@ -106,7 +117,6 @@ export function useSSE() {
                 break;
 
               case 'response':
-                // 直接调用 onResponse 回调
                 if (data.content) {
                   callbacks.onResponse?.(data.content, data.session_id);
                 }
@@ -118,6 +128,44 @@ export function useSSE() {
 
               case 'error':
                 callbacks.onError?.(data.content || '未知错误');
+                break;
+
+              // Plan-and-Execute 事件
+              case 'plan_start':
+                callbacks.onPlanStart?.(data.goal || '', data.total_steps || 0);
+                break;
+
+              case 'plan_step':
+                callbacks.onPlanStep?.(data.step || 0, data.action || '', data.status || 'pending');
+                break;
+
+              case 'plan_step_start':
+                callbacks.onPlanStepStart?.(data.step || 0, data.action || '');
+                break;
+
+              case 'plan_step_end':
+                callbacks.onPlanStepEnd?.(data.step || 0, data.result || '');
+                break;
+
+              case 'plan_synthesize':
+                callbacks.onPlanSynthesize?.();
+                break;
+
+              case 'plan_complete':
+                callbacks.onPlanComplete?.(data.total_steps || 0, data.completed_steps || 0);
+                break;
+
+              case 'plan_fallback':
+                callbacks.onPlanFallback?.(data.reason || '');
+                break;
+
+              // 工具调用事件
+              case 'tool_start':
+                callbacks.onToolStart?.(data.name || '');
+                break;
+
+              case 'tool_end':
+                callbacks.onToolEnd?.(data.name || '', data.duration_ms);
                 break;
             }
           } catch {

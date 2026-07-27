@@ -19,6 +19,8 @@ import { sessionsApi } from '../api/sessions';
 import { notesApi } from '../api/notes';
 import { endpoints } from '../api/endpoints';
 import type { ChatMessage, Note } from '../types/api';
+import PlanProgressCard from '../components/chat/PlanProgressCard';
+import type { PlanStepData } from '../components/chat/PlanProgressCard';
 
 export default function AIChat() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -39,6 +41,19 @@ export default function AIChat() {
   const [noteSearch, setNoteSearch] = useState('');
   const [loadingNotes, setLoadingNotes] = useState(false);
   const notePickerRef = useRef<HTMLDivElement>(null);
+
+  // Plan-and-Execute 进度状态
+  const [planGoal, setPlanGoal] = useState('');
+  const [planSteps, setPlanSteps] = useState<PlanStepData[]>([]);
+  const [planTotalSteps, setPlanTotalSteps] = useState(0);
+  const [planCompletedSteps, setPlanCompletedSteps] = useState(0);
+  const [planActive, setPlanActive] = useState(false);
+  const [planComplete, setPlanComplete] = useState(false);
+  const [currentTool, setCurrentTool] = useState('');
+
+  // requestAnimationFrame 节流：合并高频 token 更新
+  const rafRef = useRef<number | null>(null);
+  const pendingContentRef = useRef('');
 
   const messages = useSessionStore((s) => s.messages);
   const addMessage = useSessionStore((s) => s.addMessage);
@@ -173,6 +188,13 @@ export default function AIChat() {
     setSelectedNotes([]);
     setIsStreaming(true);
     setThinkingStages([]);
+    // 重置 Plan 状态
+    setPlanGoal('');
+    setPlanSteps([]);
+    setPlanTotalSteps(0);
+    setPlanCompletedSteps(0);
+    setPlanActive(false);
+    setPlanComplete(false);
 
     // 添加 AI 占位消息
     const aiMsg: ChatMessage = {
@@ -186,6 +208,18 @@ export default function AIChat() {
 
     let accumulated = '';
 
+    // 节流刷新函数：用 rAF 合并高频 token 更新
+    const scheduleFlush = () => {
+      if (rafRef.current !== null) return; // 已有待处理的 rAF
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null;
+        if (pendingContentRef.current) {
+          updateLastAssistantMessage(pendingContentRef.current);
+          pendingContentRef.current = '';
+        }
+      });
+    };
+
     try {
       await start(
         endpoints.chat.query,
@@ -196,10 +230,21 @@ export default function AIChat() {
           },
           onResponse: (content) => {
             accumulated += content;
-            updateLastAssistantMessage(accumulated);
+            pendingContentRef.current = accumulated;
+            scheduleFlush();
           },
           onDone: (newSessionId) => {
+            // 确保最后一次更新被刷新
+            if (rafRef.current !== null) {
+              cancelAnimationFrame(rafRef.current);
+              rafRef.current = null;
+            }
+            if (pendingContentRef.current) {
+              updateLastAssistantMessage(pendingContentRef.current);
+              pendingContentRef.current = '';
+            }
             setIsStreaming(false);
+            setCurrentTool('');
             // 新会话创建后记录并更新 URL
             if (newSessionId) {
               setLastSessionId(newSessionId);
@@ -209,14 +254,79 @@ export default function AIChat() {
             }
           },
           onError: (msg) => {
+            // 确保错误前内容被刷新
+            if (rafRef.current !== null) {
+              cancelAnimationFrame(rafRef.current);
+              rafRef.current = null;
+            }
+            if (pendingContentRef.current) {
+              updateLastAssistantMessage(pendingContentRef.current);
+              pendingContentRef.current = '';
+            }
             updateLastAssistantMessage(`⚠️ ${msg}`);
             setIsStreaming(false);
+            setCurrentTool('');
+          },
+          // Plan-and-Execute 事件回调
+          onPlanStart: (goal, totalSteps) => {
+            setPlanActive(true);
+            setPlanGoal(goal);
+            setPlanTotalSteps(totalSteps);
+          },
+          onPlanStep: (step, action, status) => {
+            setPlanSteps((prev) => {
+              const existing = prev.find((s) => s.step === step);
+              if (existing) {
+                return prev.map((s) => s.step === step ? { ...s, status: status as PlanStepData['status'] } : s);
+              }
+              return [...prev, { step, action, status: status as PlanStepData['status'] }];
+            });
+          },
+          onPlanStepStart: (step, _action) => {
+            setPlanSteps((prev) =>
+              prev.map((s) => s.step === step ? { ...s, status: 'running' as const } : s)
+            );
+          },
+          onPlanStepEnd: (step, result) => {
+            setPlanSteps((prev) =>
+              prev.map((s) => s.step === step ? { ...s, status: 'completed' as const, result } : s)
+            );
+            setPlanCompletedSteps((c) => c + 1);
+          },
+          onPlanSynthesize: () => {
+            // 综合阶段开始，所有步骤已完成
+          },
+          onPlanComplete: (totalSteps, completedSteps) => {
+            setPlanTotalSteps(totalSteps);
+            setPlanCompletedSteps(completedSteps);
+            setPlanComplete(true);
+          },
+          onPlanFallback: (_reason) => {
+            // Plan 失败降级为 ReAct，隐藏进度条
+            setPlanActive(false);
+            setCurrentTool('');
+          },
+          // 工具调用事件
+          onToolStart: (name) => {
+            setCurrentTool(name);
+          },
+          onToolEnd: (_name) => {
+            setCurrentTool('');
           },
         }
       );
     } finally {
       // 无论正常结束、报错还是用户点击停止（AbortError），都确保重置流式状态
       setIsStreaming(false);
+      // 清理 rAF
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      if (pendingContentRef.current) {
+        updateLastAssistantMessage(pendingContentRef.current);
+        pendingContentRef.current = '';
+      }
     }
   };
 
@@ -277,6 +387,17 @@ export default function AIChat() {
                 ? 'bg-[var(--color-accent)] text-white'
                 : 'bg-[var(--color-card)] border border-[var(--color-border)] text-[var(--color-text)]'
             }`}>
+              {/* Plan 进度卡片（仅在最后一条 AI 消息上显示） */}
+              {msg.role === 'assistant' && planActive && msg === messages[messages.length - 1] && (
+                <PlanProgressCard
+                  goal={planGoal}
+                  steps={planSteps}
+                  completedSteps={planCompletedSteps}
+                  totalSteps={planTotalSteps}
+                  isComplete={planComplete}
+                  currentTool={currentTool}
+                />
+              )}
               {msg.role === 'assistant' && thinkingStages.length > 0 && !msg.content && (
                 <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">
                   {thinkingStages.map((s, i) => (
