@@ -89,8 +89,8 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
       {/* Logo 区域 */}
       <div className={`flex items-center p-4 border-b border-[var(--color-border)] ${collapsed ? 'justify-center' : 'justify-between'}`}>
         {!collapsed && (
-          <h1 className="font-heading text-lg font-bold text-[var(--color-accent)]">
-            RAG NoteBook
+          <h1 className="font-heading text-2xl font-bold text-[var(--color-accent)]">
+            云上笔记
           </h1>
         )}
         <button
