@@ -91,11 +91,27 @@ class BackgroundInitManager:
             logger.error(f"后台初始化失败: {e}")
     
     async def _init_models(self):
-        """初始化 AI 模型（Chat + Embedding）"""
+        """初始化 AI 模型（Chat + Embedding + Classifier + Plan）"""
         try:
-            from app.utils.factory import create_chat_model, create_embed_model
+            from app.utils.factory import (
+                create_chat_model, create_embed_model,
+                create_classifier_model, create_plan_model,
+            )
             self.chat_model = create_chat_model()
             self.embed_model = create_embed_model()
+            # 分类器和 Plan 模型（轻量级，失败不影响核心功能）
+            try:
+                self.classifier_model = create_classifier_model()
+                logger.info("分类器模型初始化成功")
+            except Exception as e:
+                logger.warning(f"分类器模型初始化失败，L2 分类不可用: {e}")
+                self.classifier_model = None
+            try:
+                self.plan_model = create_plan_model()
+                logger.info("Plan 模型初始化成功")
+            except Exception as e:
+                logger.warning(f"Plan 模型初始化失败，Plan-Execute 不可用: {e}")
+                self.plan_model = None
             logger.info("AI 模型初始化成功")
         except Exception as e:
             logger.warning(f"AI 模型初始化失败（部分功能不可用）: {e}")

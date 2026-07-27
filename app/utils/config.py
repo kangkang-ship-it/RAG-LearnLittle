@@ -139,3 +139,23 @@ def get_memory_compression_config() -> dict:
         agent.yaml 中的 memory_compression 配置字典
     """
     return load_yaml("agent.yaml").get("memory_compression", {})
+
+
+def get_plan_execute_config() -> dict:
+    """
+    获取 Plan-and-Execute 配置
+    
+    Returns:
+        agent.yaml 中的 plan_execute 配置字典
+    """
+    return load_yaml("agent.yaml").get("plan_execute", {})
+
+
+def get_classifier_config() -> dict:
+    """
+    获取查询分类器配置
+    
+    Returns:
+        agent.yaml 中的 classifier 配置字典
+    """
+    return load_yaml("agent.yaml").get("classifier", {})

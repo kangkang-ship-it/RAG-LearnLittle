@@ -63,7 +63,7 @@ async def chat_query(
         # 使用独立 session 获取或创建会话（不依赖请求级 db）
         async with async_session_factory() as db:
             session_id = await chat_service.get_or_create_session(db, user_id, data.session_id)  # 获取Session_id,如果已经存在就返回，否则创建一个新的session
-            await db.commit()
+            await db.commit()  # 提交事务，确保会话创建成功
         
         # 保存用户消息（使用独立 session + commit，确保持久化）
         await chat_service.save_message_with_commit(
@@ -271,8 +271,15 @@ async def chat_query(
                 yield f"data: {json.dumps({'type': 'thinking', 'stage': 'rag', 'content': f'已从知识库检索到 {len(rag_sources)} 个相关文档'})}\n\n"
             yield f"data: {json.dumps({'type': 'thinking', 'stage': 'processing', 'content': '正在思考...'})}\n\n"
             
-            # ===== 通过 Agent 生成回答（使用 agent_runner 统一调用链）=====
-            from app.ai_service.agent_runner import execute_agent
+            # ===== 查询复杂度分类 + 混合路由 =====
+            from app.ai_service.query_classifier import QueryClassifier
+            
+            classifier = QueryClassifier(llm_model=getattr(init_manager, 'classifier_model', None))
+            classification = await classifier.classify(data.message)  # 分类结果包含 complexity, source, reason，判断复杂度
+            logger.info(
+                f"查询分类: complexity={classification.complexity}, "
+                f"source={classification.source}, reason={classification.reason}"
+            )
             
             # 获取笔记服务和回顾服务（等待阶段 2 完成，最多等待 5 秒）
             note_service = None
@@ -292,28 +299,120 @@ async def chat_query(
                 logger.warning(f"获取 Agent 工具服务失败: {e}")
             
             accumulated = ""
-            async for event in execute_agent(
-                chat_model=chat_model,
-                user_id=user_id,
-                user_message=data.message,
-                system_prompt=system_prompt,
-                compressed_messages=compressed_messages,
-                db_session_factory=async_session_factory,
-                note_service=note_service,
-                review_service=review_service,
-                timeout=LLM_STREAM_TIMEOUT,
-            ):
-                event_type = event.get("type", "")
+            
+            if classification.complexity == "simple":
+                # ===== 简单问题：走现有 ReAct Agent（逻辑完全不变）=====
+                from app.ai_service.agent_runner import execute_agent
                 
-                if event_type == "response":
-                    accumulated += event.get("content", "")
-                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                elif event_type == "error":
-                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                    return
-                elif event_type == "stream_done":
-                    break  # 流式完成，跳到后面发送带 RAG 信息的 done 事件
-                # tool_start / tool_end 事件静默跳过（不推送给前端）
+                async for event in execute_agent(
+                    chat_model=chat_model,
+                    user_id=user_id,
+                    user_message=data.message,
+                    system_prompt=system_prompt,
+                    compressed_messages=compressed_messages,
+                    db_session_factory=async_session_factory,
+                    note_service=note_service,
+                    review_service=review_service,
+                    timeout=LLM_STREAM_TIMEOUT,
+                ):
+                    event_type = event.get("type", "")
+                    
+                    if event_type == "response":
+                        accumulated += event.get("content", "")
+                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    elif event_type == "error":
+                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                        return
+                    elif event_type == "stream_done":
+                        break
+            else:
+                # ===== 复杂问题：走 Plan-and-Execute Agent =====
+                plan_model = getattr(init_manager, 'plan_model', None)  # 获取用于制定计划的模型
+                
+                if plan_model is None:
+                    # Plan 模型不可用，降级为 ReAct
+                    logger.warning("Plan 模型不可用，复杂查询降级为 ReAct")
+                    from app.ai_service.agent_runner import execute_agent
+                    
+                    async for event in execute_agent(
+                        chat_model=chat_model,
+                        user_id=user_id,
+                        user_message=data.message,
+                        system_prompt=system_prompt,
+                        compressed_messages=compressed_messages,
+                        db_session_factory=async_session_factory,
+                        note_service=note_service,
+                        review_service=review_service,
+                        timeout=LLM_STREAM_TIMEOUT,
+                    ):
+                        event_type = event.get("type", "")
+                        if event_type == "response":
+                            accumulated += event.get("content", "")
+                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                        elif event_type == "error":
+                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                            return
+                        elif event_type == "stream_done":
+                            break
+                else:   # Plan 模型可用，执行 Plan-and-Execute
+                    from app.ai_service.plan_execute_agent import execute_plan_agent
+                    
+                    async for event in execute_plan_agent(
+                        chat_model=chat_model,
+                        plan_model=plan_model,
+                        user_id=user_id,
+                        user_message=data.message,
+                        system_prompt=system_prompt,
+                        compressed_messages=compressed_messages,
+                        db_session_factory=async_session_factory,
+                        note_service=note_service,
+                        review_service=review_service,
+                        timeout=LLM_STREAM_TIMEOUT * 2,
+                    ):
+                        event_type = event.get("type", "")
+                        
+                        if event_type == "response":
+                            accumulated += event.get("content", "")
+                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                        elif event_type == "error":
+                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                            return
+                        elif event_type == "plan_fallback":
+                            # Plan 失败，降级为 ReAct
+                            logger.info(f"Plan 降级: {event.get('reason', '')}")
+                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                            from app.ai_service.agent_runner import execute_agent
+                            
+                            async for fallback_event in execute_agent(
+                                chat_model=chat_model,
+                                user_id=user_id,
+                                user_message=data.message,
+                                system_prompt=system_prompt,
+                                compressed_messages=compressed_messages,
+                                db_session_factory=async_session_factory,
+                                note_service=note_service,
+                                review_service=review_service,
+                                timeout=LLM_STREAM_TIMEOUT,
+                            ):
+                                ft = fallback_event.get("type", "")
+                                if ft == "response":
+                                    accumulated += fallback_event.get("content", "")
+                                    yield f"data: {json.dumps(fallback_event, ensure_ascii=False)}\n\n"
+                                elif ft == "error":
+                                    yield f"data: {json.dumps(fallback_event, ensure_ascii=False)}\n\n"
+                                    return
+                                elif ft == "stream_done":
+                                    break
+                            break
+                        elif event_type in (
+                            "plan_start", "plan_step", "plan_step_start",
+                            "plan_step_end", "plan_synthesize", "plan_complete",
+                        ):
+                            # 推送 Plan 事件给前端
+                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                        elif event_type in ("tool_start", "tool_end"):
+                            # 透传工具调用状态（让前端知道正在执行工具）
+                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             
             # 异步保存 AI 回复到数据库 + Redis（非阻塞，不延迟 done 事件）
             if accumulated:

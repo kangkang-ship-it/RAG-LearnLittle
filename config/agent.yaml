@@ -7,6 +7,43 @@ agent:
   # 上下文窗口最大轮数（滑动窗口）
   max_history_rounds: 20
 
+# Plan-and-Execute 配置
+plan_execute:
+  # Plan 阶段
+  max_steps: 5                    # 计划最多步骤数
+  plan_timeout: 30                # Plan 生成超时（秒），轻量模型建议 30s+
+  step_timeout: 90                # 单步执行超时（秒），复杂步骤建议 60s+
+  synthesize_timeout: 60          # 综合阶段超时（秒）
+  total_timeout: 300              # 总超时（秒），多步骤任务需要更长时间
+  # 并行执行
+  enable_parallel: true           # 是否并行执行无依赖步骤
+  max_parallel_steps: 3           # 最大并行步骤数
+
+# 查询分类配置
+classifier:
+  # L1 规则层
+  rule_complex_keywords:          # 复杂意图关键词/模式
+    - "分析.*总结"
+    - "对比.*整理"
+    - "研究.*归纳"
+    - "先.*然后.*再"
+    - "计划"
+    - "规划"
+    - "步骤"
+    - "方案"
+    - "策略"
+    - "综合分析"
+    - "系统梳理"
+  rule_simple_patterns:           # 简单意图模式
+    - "^你好"
+    - "^谢谢"
+    - "^再见"
+    - "^现在.*时间"
+  rule_complex_min_length: 200    # 长消息判定阈值（字符数）
+  # L2 LLM 层
+  llm_enabled: true               # 是否启用 LLM 精判
+  llm_confidence: 0.8             # LLM 判定置信度
+
 # RAG 配置
 rag:
   # 是否启用 LLM 文档总结（false=轻量截断，延迟低；true=LLM总结，质量高）

@@ -135,6 +135,93 @@ def create_embed_model():
     return _create_ollama_embed_model()
 
 
+def create_classifier_model():
+    """
+    创建分类器专用 Chat 模型（轻量、快速）
+
+    环境变量 CLASSIFIER_MODEL 指定模型名，默认根据 provider 选择轻量版：
+    - dashscope → qwen3-flash
+    - ollama    → qwen3:0.6b
+
+    如果轻量模型不可用，退化为使用主模型。
+
+    Returns:
+        LangChain ChatModel 实例
+    """
+    provider = get_provider()
+
+    if provider == ModelProvider.DASHSCOPE:
+        model_name = os.getenv("CLASSIFIER_MODEL", "qwen3-flash")
+        api_key = os.getenv("DASHSCOPE_API_KEY", "")
+        if not api_key:
+            logger.warning("DASHSCOPE_API_KEY 未配置，分类器退化为使用主模型")
+            return create_chat_model()
+
+        logger.info(f"创建分类器模型: {model_name} (DashScope)")
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
+            model=model_name,
+            api_key=api_key,
+            base_url=DASHSCOPE_BASE_URL,
+            streaming=False,  # 分类器不需要流式
+            http_async_client=get_shared_async_client(),
+            request_timeout=10.0,
+        )
+    else:
+        # Ollama
+        model_name = os.getenv("CLASSIFIER_MODEL", "qwen3:0.6b")
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        logger.info(f"创建分类器模型: {model_name} (Ollama)")
+        from langchain_ollama import ChatOllama
+        return ChatOllama(
+            model=model_name,
+            base_url=base_url,
+            timeout=10.0,
+            streaming=False,
+        )
+
+
+def create_plan_model():
+    """
+    创建 Plan 阶段专用 Chat 模型（轻量、支持结构化输出）
+
+    环境变量 PLAN_MODEL 指定模型名，默认复用分类器模型配置。
+
+    Returns:
+        LangChain ChatModel 实例
+    """
+    provider = get_provider()
+
+    if provider == ModelProvider.DASHSCOPE:
+        model_name = os.getenv("PLAN_MODEL", "qwen3-flash")
+        api_key = os.getenv("DASHSCOPE_API_KEY", "")
+        if not api_key:
+            logger.warning("DASHSCOPE_API_KEY 未配置，Plan 模型退化为使用主模型")
+            return create_chat_model()
+
+        logger.info(f"创建 Plan 模型: {model_name} (DashScope)")
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
+            model=model_name,
+            api_key=api_key,
+            base_url=DASHSCOPE_BASE_URL,
+            streaming=False,
+            http_async_client=get_shared_async_client(),
+            request_timeout=15.0,
+        )
+    else:
+        model_name = os.getenv("PLAN_MODEL", "qwen3:0.6b")
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        logger.info(f"创建 Plan 模型: {model_name} (Ollama)")
+        from langchain_ollama import ChatOllama
+        return ChatOllama(
+            model=model_name,
+            base_url=base_url,
+            timeout=15.0,
+            streaming=False,
+        )
+
+
 # ============================================================
 # DashScope（阿里云百炼）实现
 # ============================================================

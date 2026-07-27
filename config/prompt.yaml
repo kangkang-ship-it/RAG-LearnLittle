@@ -9,3 +9,7 @@ prompts:
   report: "prompts/report_prompt.txt"
   reorder: "prompts/reorder_prompt.txt"
   session_title: "prompts/session_title_prompt.txt"
+  # 混合路由新增
+  classify_complexity: "prompts/classify_complexity.txt"
+  plan_generation: "prompts/plan_generation.txt"
+  plan_synthesize: "prompts/plan_synthesize.txt"

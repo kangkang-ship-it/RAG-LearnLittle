@@ -5,7 +5,7 @@
 """
 
 from datetime import datetime
-from typing import Optional, List
+from typing import Literal, Optional, List, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -63,3 +63,55 @@ class MessageListResponse(BaseModel):
 class SessionTitleUpdate(BaseModel):
     """会话标题修改请求"""
     title: str = Field(..., min_length=1, max_length=200, description="新标题")
+
+
+# ============================================================
+# Plan-and-Execute SSE 事件类型定义
+# ============================================================
+
+class PlanStartEvent(TypedDict):
+    """计划开始事件"""
+    type: Literal["plan_start"]
+    goal: str
+    total_steps: int
+
+
+class PlanStepEvent(TypedDict):
+    """单个步骤声明事件"""
+    type: Literal["plan_step"]
+    step: int
+    action: str
+    status: Literal["pending", "running", "completed"]
+
+
+class PlanStepStartEvent(TypedDict):
+    """步骤开始执行事件"""
+    type: Literal["plan_step_start"]
+    step: int
+    action: str
+
+
+class PlanStepEndEvent(TypedDict):
+    """步骤执行完成事件"""
+    type: Literal["plan_step_end"]
+    step: int
+    result: str
+
+
+class PlanSynthesizeEvent(TypedDict):
+    """进入综合阶段事件"""
+    type: Literal["plan_synthesize"]
+    content: str
+
+
+class PlanCompleteEvent(TypedDict):
+    """计划全部完成事件"""
+    type: Literal["plan_complete"]
+    total_steps: int
+    completed_steps: int
+
+
+class PlanFallbackEvent(TypedDict):
+    """Plan 失败降级事件"""
+    type: Literal["plan_fallback"]
+    reason: str
