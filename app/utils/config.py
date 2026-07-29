@@ -159,3 +159,25 @@ def get_classifier_config() -> dict:
         agent.yaml 中的 classifier 配置字典
     """
     return load_yaml("agent.yaml").get("classifier", {})
+
+
+def get_tool_groups_config() -> dict:
+    """
+    获取工具分组定义
+
+    Returns:
+        agent.yaml 中的 tool_groups 配置字典
+        例: {"base": ["what_time_is_now", ...], "note_read": [...]}
+    """
+    return load_yaml("agent.yaml").get("tool_groups", {})
+
+
+def get_tool_routing_config() -> dict:
+    """
+    获取工具路由规则（关键词 → 工具组映射）
+
+    Returns:
+        agent.yaml 中的 tool_routing 配置字典
+        例: {"default_groups": [...], "keyword_rules": {"note_write": [...]}}
+    """
+    return load_yaml("agent.yaml").get("tool_routing", {})

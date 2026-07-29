@@ -70,6 +70,73 @@ token_budget:
   # 安全余量
   safety_margin: 1000
 
+# 工具按需加载配置
+tool_groups:
+  # 基础工具（每次对话默认加载）
+  base:
+    - what_time_is_now
+    - get_user_info_tools
+  # 笔记读取组（搜索/统计/推荐）
+  note_read:
+    - search_notes_tool
+    - get_note_stats_tool
+    - get_related_notes_tool
+  # 笔记写入组（创建/更新笔记）
+  note_write:
+    - create_note_tool
+    - update_note_tool
+  # 回顾组（回顾管理）
+  review:
+    - get_today_reviews_tool
+    - mark_reviewed_tool
+
+# 工具路由规则（关键词 → 工具组映射）
+tool_routing:
+  # 默认加载的工具组（未命中任何关键词时使用）
+  default_groups:
+    - base
+    - note_read
+  # 关键词 → 工具组映射（命中后追加对应组）
+  keyword_rules:
+    note_write:
+      # 创建意图
+      - "创建"
+      - "新建"
+      - "写笔记"
+      - "写一条"
+      - "记录"
+      - "添加笔记"
+      - "帮我写"
+      - "帮我记"
+      # 编辑/更新意图
+      - "修改"
+      - "编辑"
+      - "更新"
+      - "改一下"
+      - "改成"
+      - "改为"
+      - "替换"
+      - "补充"
+      - "追加"
+      - "删除笔记"
+      - "帮我改"
+    review:
+      - "回顾"
+      - "复习"
+      - "review"
+      - "待回顾"
+      - "回顾完成"
+    note_read:
+      - "搜索"
+      - "查找"
+      - "找笔记"
+      - "查笔记"
+      - "总结"
+      - "统计"
+      - "有哪些"
+      - "关联"
+      - "推荐"
+
 # 记忆压缩配置
 memory_compression:
   # 触发摘要的消息数阈值

@@ -247,7 +247,23 @@ async def chat_query(
     # 并行执行 RAG + 记忆压缩
     await asyncio.gather(_run_rag(), _run_memory_compression())
     
-    # 构建 system_prompt（注入 RAG 上下文）
+    # ===== 解析用户引用的笔记（从消息中提取结构化引用块）=====
+    import re as _re
+    referenced_notes_text = ""
+    _ref_match = _re.search(r'<referenced_notes>\s*(.*?)\s*</referenced_notes>', data.message, _re.DOTALL)
+    if _ref_match:
+        ref_block = _ref_match.group(1).strip()
+        # 解析每行："- ID: xxx | 标题: yyy"
+        ref_lines = [l.strip() for l in ref_block.split('\n') if l.strip().startswith('- ID:')]
+        if ref_lines:
+            referenced_notes_text = (
+                "\n\n## 用户当前引用的笔记（可直接使用 ID 操作）：\n"
+                + "\n".join(ref_lines)
+                + "\n提示：当用户要求修改/更新/编辑这些笔记时，直接使用上述 ID 调用 update_note_tool，无需再次搜索。"
+            )
+            logger.info(f"解析到引用笔记: {len(ref_lines)} 篇")
+    
+    # 构建 system_prompt（注入 RAG 上下文 + 引用笔记 ID）
     try:
         system_prompt = load_prompt("main")
         system_prompt = system_prompt.replace("{current_time}", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
@@ -261,6 +277,10 @@ async def chat_query(
             f"{rag_context}\n"
             "</reference>"
         )
+    
+    # 注入引用笔记 ID 到 system_prompt（让 Agent 知道可以直接操作的笔记）
+    if referenced_notes_text:
+        system_prompt += referenced_notes_text
     
     # ===== SSE 流式响应生成器 =====
     async def generate_stream():

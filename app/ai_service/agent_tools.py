@@ -14,22 +14,34 @@ Agent 工具集
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 from langchain_core.tools import tool
 
+from app.core.logger_handler import logger
 
-def create_agent_tools(user_id: str, note_service=None, review_service=None, db_session_factory=None):
+
+def create_agent_tools(
+    user_id: str,
+    note_service=None,
+    review_service=None,
+    db_session_factory=None,
+    groups: Optional[List[str]] = None,
+):
     """
     创建 Agent 工具集工厂函数
 
     每次调用创建新的工具实例，绑定当前用户上下文。
+    支持按需加载：通过 groups 参数指定要加载的工具组，
+    未指定时返回全部工具（向后兼容）。
 
     Args:
         user_id: 当前用户 ID
         note_service: 笔记服务实例
         review_service: 回顾服务实例
         db_session_factory: 数据库会话工厂
+        groups: 要加载的工具组名称列表（如 ["base", "note_read"]）。
+                None 表示加载全部工具。
 
     Returns:
         工具列表
@@ -158,13 +170,14 @@ def create_agent_tools(user_id: str, note_service=None, review_service=None, db_
         """
         更新一条已有笔记的内容、标题、标签或分类。
         只需传入要修改的字段，未传入的字段保持不变。
+        使用前请先通过 search_notes_tool 搜索目标笔记获取其 ID。
 
         Args:
-            note_id: 笔记 ID（可通过 search_notes_tool 获取）
-            title: 新标题（可选）
-            content: 新内容（可选，支持 Markdown）
-            tags: 新标签，逗号分隔（可选）
-            category: 新分类名称（可选）
+            note_id: 笔记 ID（必填，可通过 search_notes_tool 搜索获取）
+            title: 新标题（可选，不传则保持原标题不变）
+            content: 新内容（可选，支持 Markdown，不传则保持原内容不变。注意：这是完整替换，如需追加内容请先读取原内容再拼接）
+            tags: 新标签（可选，逗号分隔如 "Python,FastAPI"，不传则保持原标签不变）
+            category: 新分类名称（可选，不传则保持原分类不变）
         """
         if not db_session_factory or not note_service:
             return "服务未初始化"
@@ -233,14 +246,43 @@ def create_agent_tools(user_id: str, note_service=None, review_service=None, db_
         # 目前仅返回模拟结果
         return f"邮件已发送至 {to}，主题: {subject}"
 
-    return [
-        what_time_is_now,
-        get_user_info_tools,
-        search_notes_tool,
-        get_note_stats_tool,
-        get_today_reviews_tool,
-        mark_reviewed_tool,
-        create_note_tool,
-        update_note_tool,
-        get_related_notes_tool,
-    ]
+    # 全部工具注册表（名称 → 工具对象）
+    all_tools = {
+        "what_time_is_now": what_time_is_now,
+        "get_user_info_tools": get_user_info_tools,
+        "search_notes_tool": search_notes_tool,
+        "get_note_stats_tool": get_note_stats_tool,
+        "get_today_reviews_tool": get_today_reviews_tool,
+        "mark_reviewed_tool": mark_reviewed_tool,
+        "create_note_tool": create_note_tool,
+        "update_note_tool": update_note_tool,
+        "get_related_notes_tool": get_related_notes_tool,
+    }
+
+    # 按需加载：根据 groups 过滤工具
+    if groups is None:
+        # 未指定 groups → 返回全部（向后兼容）
+        return list(all_tools.values())
+
+    # 从配置加载工具组定义
+    from app.utils.config import get_tool_groups_config
+    tool_groups = get_tool_groups_config()
+
+    selected_names = set()
+    for group_name in groups:
+        group_tools = tool_groups.get(group_name, [])
+        if not group_tools:
+            logger.warning(f"工具组 '{group_name}' 未在 agent.yaml 中定义，跳过")
+            continue
+        selected_names.update(group_tools)
+
+    # 保持注册顺序返回
+    result = [all_tools[name] for name in all_tools if name in selected_names]
+
+    # 安全保底：至少包含 base 组工具
+    if not result:
+        logger.warning("按需加载结果为空，回退到全量工具")
+        return list(all_tools.values())
+
+    logger.debug(f"工具按需加载: groups={groups}, 选中 {len(result)}/{len(all_tools)} 个工具")
+    return result
