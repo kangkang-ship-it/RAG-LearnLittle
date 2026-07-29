@@ -172,22 +172,21 @@ def setup_logger(name: str = "raglearn") -> logging.Logger:
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    # 文件 Handler（仅在 JSON 模式或 INFO 及以上级别启用）
-    if log_format == "json" or log_level in ("INFO", "WARNING", "ERROR"):
-        log_dir = Path("logs")
-        log_dir.mkdir(exist_ok=True)
+    # 文件 Handler（始终创建，确保日志写入 logs/ 目录）
+    log_dir = Path(__file__).resolve().parent.parent.parent / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
 
-        # 按日期滚动，保留 30 天日志
-        file_handler = TimedRotatingFileHandler(
-            filename=log_dir / "app.log",
-            when="midnight",
-            interval=1,
-            backupCount=30,
-            encoding="utf-8"
-        )
-        file_handler.suffix = "%Y%m%d"
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
+    # 按日期滚动，保留 30 天日志
+    file_handler = TimedRotatingFileHandler(
+        filename=log_dir / "app.log",
+        when="midnight",
+        interval=1,
+        backupCount=30,
+        encoding="utf-8"
+    )
+    file_handler.suffix = "%Y%m%d"
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
 
     return logger
 
