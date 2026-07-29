@@ -1,11 +1,10 @@
 /**
  * 确认弹窗组件
  * 
- * 基于 Radix AlertDialog 封装。
+ * 纯 React 实现，不依赖 Radix UI。
+ * 直接在 React 树中渲染，使用 fixed 定位 + 高 z-index。
  * 支持 danger 变体（红色确认按钮）。
  */
-
-import * as AlertDialog from '@radix-ui/react-alert-dialog';
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -28,38 +27,75 @@ export default function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
-  const confirmClass = variant === 'danger'
-    ? 'bg-[var(--color-danger)] text-white hover:opacity-90'
-    : 'bg-[var(--color-accent)] text-white hover:opacity-90';
+  if (!open) return null;
+
+  const confirmBg = variant === 'danger' ? '#e05555' : '#1677ff';
 
   return (
-    <AlertDialog.Root open={open} onOpenChange={(v) => !v && onCancel()}>
-      <AlertDialog.Portal>
-        {/* 遮罩层 */}
-        <AlertDialog.Overlay className="fixed inset-0 bg-black/40 animate-fade-in" />
-        {/* 弹窗内容 */}
-        <AlertDialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md p-6 bg-[var(--color-card)] rounded-[var(--radius-lg)] shadow-card animate-fade-in">
-          <AlertDialog.Title className="text-lg font-heading font-bold text-[var(--color-text)]">
-            {title}
-          </AlertDialog.Title>
-          <AlertDialog.Description className="mt-2 text-sm text-[var(--color-text-secondary)]">
-            {description}
-          </AlertDialog.Description>
-          {/* 操作按钮 */}
-          <div className="flex justify-end gap-3 mt-6">
-            <AlertDialog.Cancel asChild>
-              <button className="px-4 py-2 text-sm rounded-[var(--radius-md)] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-border)]">
-                {cancelLabel}
-              </button>
-            </AlertDialog.Cancel>
-            <AlertDialog.Action asChild>
-              <button className={`px-4 py-2 text-sm rounded-[var(--radius-md)] ${confirmClass}`} onClick={onConfirm}>
-                {confirmLabel}
-              </button>
-            </AlertDialog.Action>
-          </div>
-        </AlertDialog.Content>
-      </AlertDialog.Portal>
-    </AlertDialog.Root>
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        width: '100vw',
+        height: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(0,0,0,0.4)',
+        zIndex: 2147483647,
+      }}
+      onClick={onCancel}
+    >
+      <div
+        style={{
+          width: '100%',
+          maxWidth: '28rem',
+          padding: '1.5rem',
+          backgroundColor: '#ffffff',
+          borderRadius: '1rem',
+          boxShadow: '0 12px 48px rgba(22,119,255,0.1)',
+          border: '1px solid #d4dff0',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 style={{ fontSize: '1.125rem', fontWeight: 700, color: '#1a2a4a', margin: 0 }}>
+          {title}
+        </h3>
+        <p style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: '#5a6a8a' }}>
+          {description}
+        </p>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1.5rem' }}>
+          <button
+            onClick={onCancel}
+            style={{
+              padding: '0.5rem 1rem',
+              fontSize: '0.875rem',
+              borderRadius: '0.75rem',
+              border: '1px solid #d4dff0',
+              backgroundColor: '#fff',
+              color: '#5a6a8a',
+              cursor: 'pointer',
+            }}
+          >
+            {cancelLabel}
+          </button>
+          <button
+            onClick={() => { onConfirm(); onCancel(); }}
+            style={{
+              padding: '0.5rem 1rem',
+              fontSize: '0.875rem',
+              borderRadius: '999px',
+              border: 'none',
+              backgroundColor: confirmBg,
+              color: '#fff',
+              cursor: 'pointer',
+            }}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

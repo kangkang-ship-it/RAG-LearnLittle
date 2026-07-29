@@ -22,7 +22,7 @@ export default function LoadingSkeleton({ lines = 3, fullPage = false }: Loading
       {Array.from({ length: cardCount }).map((_, i) => (
         <div
           key={i}
-          className="bg-[var(--color-card)] rounded-[var(--radius-md)] p-4 animate-pulse"
+          className="bg-white rounded-2xl p-4 animate-pulse border border-[#d4dff0] shadow-[0_2px_8px_rgba(22,119,255,0.06)]"
         >
           {/* 标题条 */}
           <div className="h-5 bg-[var(--color-border)] rounded w-3/4 mb-3" />

@@ -167,13 +167,17 @@ export default function AIChat() {
   const handleSend = async () => {
     if (!input.trim() || isStreaming) return;
 
-    // 构建发送内容：若有引用笔记，将笔记内容作为上下文附加
+    // 构建发送内容：若有引用笔记，将笔记内容作为上下文附加（含 ID 供 Agent 直接更新）
     let messageText = input;
     if (selectedNotes.length > 0) {
       const noteContext = selectedNotes
         .map((n) => `【笔记：${n.title}】\n${n.content}`)
         .join('\n\n');
-      messageText = `${input}\n\n---\n以下是用户引用的笔记内容，请结合这些内容回答：\n${noteContext}`;
+      // 结构化引用块：包含笔记 ID，供后端解析并注入 Agent 上下文
+      const noteRefBlock = selectedNotes
+        .map((n) => `- ID: ${n.id} | 标题: ${n.title}`)
+        .join('\n');
+      messageText = `${input}\n\n---\n以下是用户引用的笔记内容，请结合这些内容回答：\n${noteContext}\n\n<referenced_notes>\n${noteRefBlock}\n</referenced_notes>`;
     }
 
     const userMsg: ChatMessage = {
@@ -421,24 +425,6 @@ export default function AIChat() {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* 引用笔记标签 */}
-      {selectedNotes.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 mb-2">
-          {selectedNotes.map((note) => (
-            <span
-              key={note.id}
-              className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-[var(--radius-md)] bg-[var(--color-accent-bg)] text-[var(--color-accent)] border border-[var(--color-accent)]/20"
-            >
-              <FileText size={12} />
-              <span className="max-w-[120px] truncate">{note.title}</span>
-              <button onClick={() => removeNote(note.id)} className="hover:opacity-70">
-                <X size={12} />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-
       {/* 输入区 */}
       <div className="relative flex gap-2">
         {/* 引用笔记按钮 */}
@@ -529,6 +515,24 @@ export default function AIChat() {
           </button>
         )}
       </div>
+
+      {/* 引用笔记标签（输入框下方） */}
+      {selectedNotes.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          {selectedNotes.map((note) => (
+            <span
+              key={note.id}
+              className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-[var(--radius-md)] bg-[var(--color-accent-bg)] text-[var(--color-accent)] border border-[var(--color-accent)]/20"
+            >
+              <FileText size={12} />
+              <span className="max-w-[120px] truncate">{note.title}</span>
+              <button onClick={() => removeNote(note.id)} className="hover:opacity-70">
+                <X size={12} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

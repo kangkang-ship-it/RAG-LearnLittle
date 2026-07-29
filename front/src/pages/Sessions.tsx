@@ -12,7 +12,6 @@ import { MessageSquare, Trash2, RefreshCw } from 'lucide-react';
 import { sessionsApi } from '../api/sessions';
 import { useSessionStore } from '../stores/useSessionStore';
 import EmptyState from '../components/common/EmptyState';
-import ConfirmDialog from '../components/common/ConfirmDialog';
 import type { ChatSession } from '../types/api';
 
 export default function Sessions() {
@@ -116,15 +115,39 @@ export default function Sessions() {
         </div>
       )}
 
-      <ConfirmDialog
-        open={!!deleteId}
-        title="确认删除"
-        description="删除后不可恢复，对话记录将永久丢失。"
-        confirmLabel="删除"
-        variant="danger"
-        onConfirm={handleDelete}
-        onCancel={() => setDeleteId(null)}
-      />
+      {/* 删除确认弹窗 */}
+      {deleteId && (
+        <div
+          style={{
+            position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            backgroundColor: 'rgba(0,0,0,0.4)', zIndex: 2147483647,
+          }}
+          onClick={() => setDeleteId(null)}
+        >
+          <div
+            style={{
+              width: '100%', maxWidth: '28rem', padding: '1.5rem',
+              backgroundColor: '#fff', borderRadius: '1rem',
+              boxShadow: '0 12px 48px rgba(22,119,255,0.1)', border: '1px solid #d4dff0',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ fontSize: '1.125rem', fontWeight: 700, color: '#1a2a4a', margin: 0 }}>确认删除</h3>
+            <p style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: '#5a6a8a' }}>删除后不可恢复，对话记录将永久丢失。</p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1.5rem' }}>
+              <button onClick={() => setDeleteId(null)}
+                style={{ padding: '0.5rem 1rem', fontSize: '0.875rem', borderRadius: '0.75rem', border: '1px solid #d4dff0', backgroundColor: '#fff', color: '#5a6a8a', cursor: 'pointer' }}>
+                取消
+              </button>
+              <button onClick={handleDelete}
+                style={{ padding: '0.5rem 1rem', fontSize: '0.875rem', borderRadius: '999px', border: 'none', backgroundColor: '#e05555', color: '#fff', cursor: 'pointer' }}>
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
