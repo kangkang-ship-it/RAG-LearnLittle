@@ -19,7 +19,7 @@ from typing import AsyncGenerator, Dict, Any, List, Optional
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from app.core.logger_handler import logger
-from app.utils.config import get_plan_execute_config
+from app.utils.config import get_plan_execute_config, get_agent_config
 
 
 # ============================================================
@@ -152,6 +152,44 @@ def _topological_batches(steps: List[PlanStep]) -> List[List[PlanStep]]:
     return batches
 
 
+def _resolve_step_tool_groups(step: PlanStep) -> Optional[List[str]]:
+    """
+    根据步骤的 tool 字段反查所属工具组
+
+    从 agent.yaml 的 tool_groups 配置构建 工具名 → 组名 反向映射，
+    根据 step.tool 查找其所属的工具组。
+    始终包含 "base" 组（基础工具）。
+
+    Args:
+        step: 执行计划步骤
+
+    Returns:
+        工具组列表，如 ["base", "note_write"]；tool 为 "none" 时返回 None
+    """
+    if not step.tool or step.tool == "none":
+        return None
+
+    agent_config = get_agent_config()
+    tool_groups_config = agent_config.get("tool_groups", {})
+
+    # 构建反向映射：工具名 → 组名
+    tool_to_group = {}
+    for group_name, tools in tool_groups_config.items():
+        for tool_name in tools:
+            tool_to_group[tool_name] = group_name
+
+    # 查找 step.tool 所属的组
+    matched_groups = ["base"]  # 始终包含基础组
+    group = tool_to_group.get(step.tool)
+    if group and group not in matched_groups:
+        matched_groups.append(group)
+        logger.debug(f"步骤 {step.step} 工具路由: tool='{step.tool}' → 工具组 {matched_groups}")
+    else:
+        logger.warning(f"步骤 {step.step} 工具 '{step.tool}' 未匹配到任何工具组，使用默认组")
+
+    return matched_groups
+
+
 async def _execute_step(
     step: PlanStep,
     chat_model,
@@ -192,6 +230,9 @@ async def _execute_step(
         try:
             from app.ai_service.agent_runner import execute_agent
 
+            # 根据 step.tool 反查工具组，跳过关键词路由
+            step_tool_groups = _resolve_step_tool_groups(step)
+
             accumulated = ""
             async for event in execute_agent(
                 chat_model=chat_model,
@@ -203,6 +244,7 @@ async def _execute_step(
                 note_service=note_service,
                 review_service=review_service,
                 timeout=step_timeout,
+                override_groups=step_tool_groups,
             ):
                 event_type = event.get("type", "")
                 if event_type == "response":

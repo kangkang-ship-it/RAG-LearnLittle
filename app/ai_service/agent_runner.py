@@ -59,6 +59,15 @@ def resolve_tool_groups(user_message: str) -> List[str]:
                 break  # 命中一个即可，无需继续匹配同组
 
     logger.info(f"工具路由结果: groups={selected} (message='{user_message[:50]}...')")
+
+    # 兜底策略：当消息较长（>=15字符）但未命中任何写入/回顾关键词时，
+    # 默认加载 note_write 组，避免关键词匹配遗漏导致 Agent 无法创建笔记。
+    # 短消息（如“你好”“谢谢”）不触发兜底，保持轻量。
+    if len(user_message) >= 15:
+        if "note_write" not in selected:
+            selected.append("note_write")
+            logger.debug(f"工具路由兜底: 消息较长但未命中写入关键词，追加 note_write")
+
     return selected
 
 
@@ -72,6 +81,7 @@ async def execute_agent(
     note_service=None,
     review_service=None,
     timeout: int = 60,
+    override_groups: Optional[List[str]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     执行 Agent 并返回事件字典流
@@ -88,14 +98,19 @@ async def execute_agent(
         note_service: 笔记服务实例（供笔记相关工具使用）
         review_service: 回顾服务实例（供回顾相关工具使用）
         timeout: 超时秒数
+        override_groups: 直接指定工具组，跳过关键词路由（Plan-Execute 步骤使用）
 
     Yields:
         事件字典（type 字段区分类型）
     """
     agent_config = get_agent_config()
 
-    # 1. 工具路由：根据用户消息关键词匹配决定加载哪些工具组
-    tool_groups = resolve_tool_groups(user_message)
+    # 1. 工具路由：优先使用 override_groups（Plan-Execute 步骤直指定），否则关键词匹配
+    if override_groups is not None:
+        tool_groups = override_groups
+        logger.info(f"工具路由: 使用 override_groups={tool_groups} (跳过关键词匹配)")
+    else:
+        tool_groups = resolve_tool_groups(user_message)
 
     # 2. 创建工具集（注入笔记服务和回顾服务 + 按需加载）
     tools = create_agent_tools(
