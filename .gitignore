@@ -15,6 +15,10 @@ venv/
 data/
 logs/
 media/
+backend_err.log
+backend_out.log
+backend_stderr.log
+backend_stdout.log
 
 # IDE
 .vscode/

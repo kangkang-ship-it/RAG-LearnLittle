@@ -356,7 +356,10 @@ def _clean_env(key: str, default: str, valid_values: list = None) -> str:
 
 
 if __name__ == "__main__":
+    import logging
     import uvicorn
+    from logging.handlers import TimedRotatingFileHandler
+    from pathlib import Path
 
     # 调试模式：设置环境变量 UVICORN_RELOAD=false 或通过 launch.json 使用 --no-reload
     # 原因：reload=True 会 fork 子进程，导致 VSCode 断点无法命中
@@ -365,6 +368,34 @@ if __name__ == "__main__":
     # 安全解析 LOG_LEVEL（防止内联注释被当作值，如 "DEBUG  # 注释"）
     _valid_log_levels = ["critical", "error", "warning", "info", "debug", "trace"]
     log_level = _clean_env("LOG_LEVEL", "info", _valid_log_levels)
+
+    # ---- 将 uvicorn 日志输出到 logs/ 目录 ----
+    # 避免根目录产生 backend_err.log / backend_out.log 等散落文件
+    _log_dir = Path("logs")
+    _log_dir.mkdir(exist_ok=True)
+
+    class _SimpleFormatter(logging.Formatter):
+        """uvicorn 日志格式化器（简洁格式，与 uvicorn 自带控制台输出风格一致）"""
+        def __init__(self):
+            super().__init__(fmt="%(asctime)s %(levelname)s:  %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+
+    _uvicorn_formatter = _SimpleFormatter()
+
+    # uvicorn.error → logs/uvicorn.log（启动、关闭、错误信息）
+    _uvicorn_error_fh = TimedRotatingFileHandler(
+        filename=_log_dir / "uvicorn.log",
+        when="midnight", interval=1, backupCount=30, encoding="utf-8",
+    )
+    _uvicorn_error_fh.setFormatter(_uvicorn_formatter)
+    logging.getLogger("uvicorn").addHandler(_uvicorn_error_fh)
+
+    # uvicorn.access → logs/access.log（HTTP 访问日志）
+    _uvicorn_access_fh = TimedRotatingFileHandler(
+        filename=_log_dir / "access.log",
+        when="midnight", interval=1, backupCount=30, encoding="utf-8",
+    )
+    _uvicorn_access_fh.setFormatter(_uvicorn_formatter)
+    logging.getLogger("uvicorn.access").addHandler(_uvicorn_access_fh)
 
     uvicorn.run(
         "main:app",
