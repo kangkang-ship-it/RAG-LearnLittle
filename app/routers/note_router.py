@@ -123,6 +123,7 @@ async def batch_operation(
     db: AsyncSession = Depends(get_db),
 ):
     """批量操作笔记（删除/置顶/取消置顶/移动分类）"""
+    from app.core.logger_handler import logger
     note_service = _get_note_service()
     
     success_count = 0
@@ -145,11 +146,20 @@ async def batch_operation(
         except Exception as e:
             errors.append(f"{note_id}: {str(e)}")
     
-    await db.flush()
-    
+    # 显式提交事务，确保变更持久化到 MySQL
+    # 不依赖 get_db() 的尾部 commit，避免异步 ChromaDB 调用后 session 状态异常导致变更丢失
     if errors:
-        from app.core.logger_handler import logger
-        logger.warning(f"批量操作部分失败: operation={data.operation}, errors={errors}")
+        await db.rollback()
+        logger.warning(f"批量操作部分失败: operation={data.operation}, success={success_count}, errors={errors}")
+    else:
+        try:
+            await db.commit()
+            logger.info(f"批量操作提交成功: operation={data.operation}, count={success_count}")
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"批量操作提交失败: operation={data.operation}, error={e}")
+            from app.core.failed_response import BusinessError, ErrorCode
+            raise BusinessError(code=ErrorCode.INTERNAL_ERROR, http_status=500, message=f"批量操作提交失败: {e}")
     
     return success_response(message=f"批量 {data.operation} 操作完成，成功 {success_count} 篇")
 

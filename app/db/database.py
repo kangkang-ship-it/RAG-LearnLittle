@@ -38,11 +38,13 @@ DATABASE_URL = (
 
 # ========== 异步引擎与会话工厂 ==========
 
-# 异步引擎：连接池 10（最小）+ 20（最大溢出）
+# 异步引擎：连接池 20（最小）+ 30（最大溢出）
+# 单个 /chat/query 请求最多打开 4-6 个独立 session，10 并发即可耗尽旧配置（pool=10+20）
+# 扩容至 20+30=50，支撑约 15-20 并发用户（需 MySQL max_connections >= 200）
 engine = create_async_engine(
     url=DATABASE_URL,
-    pool_size=10,
-    max_overflow=20,
+    pool_size=20,
+    max_overflow=30,
     pool_pre_ping=True,       # 连接前 ping 检测，自动重连断开的连接
     pool_recycle=3600,        # 连接回收时间（秒），防止 MySQL 8 小时超时断连
     echo=False,               # 生产环境关闭 SQL 日志

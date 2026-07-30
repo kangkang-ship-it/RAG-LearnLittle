@@ -39,8 +39,13 @@ session_manager = DatabaseSessionManager()
 # LLM 流式响应超时时间（秒）
 LLM_STREAM_TIMEOUT = int(os.getenv("LLM_STREAM_TIMEOUT", "60"))
 
+# SSE 单用户最大并发连接数
+# 防止恶意用户通过大量 SSE 连接耗尽服务器资源
+SSE_MAX_CONNECTIONS_PER_USER = 3
+_sse_active_counts: dict[str, int] = {}
 
-@router.post("/chat/query", summary="Agent 流式对话")
+
+@router.post("/chat/query", summary="Agent 流式对话", dependencies=[Depends(rate_limit(endpoint_limit=10))])
 async def chat_query(
     data: QueryRequest,
     user_id: str = Depends(get_current_user_id),
@@ -92,6 +97,13 @@ async def chat_query(
         async def error_stream():
             yield f"data: {json.dumps({'type': 'error', 'content': 'AI 模型未初始化'})}\n\n"
         return StreamingResponse(error_stream(), media_type="text/event-stream")
+    
+    # SSE 并发连接数检查（在昂贵操作之前拦截）
+    if _sse_active_counts.get(user_id, 0) >= SSE_MAX_CONNECTIONS_PER_USER:
+        logger.warning(f"SSE 连接数超限: user_id={user_id}, count={_sse_active_counts[user_id]}")
+        async def limit_stream():
+            yield f"data: {json.dumps({'type': 'error', 'content': '并发连接数已达上限（最多 %d 个），请关闭多余标签页后重试' % SSE_MAX_CONNECTIONS_PER_USER})}\n\n"
+        return StreamingResponse(limit_stream(), media_type="text/event-stream")
     
     # 后台触发自动更新会话标题（非阻塞，chat_model 已就绪）
     asyncio.create_task(
@@ -285,6 +297,9 @@ async def chat_query(
     # ===== SSE 流式响应生成器 =====
     async def generate_stream():
         """生成 SSE 流式响应（RAG + 记忆压缩已并行完成，直接生成）"""
+        # SSE 连接计数 +1（在生成器内部，确保只有实际流式传输时才占用连接槽）
+        _sse_active_counts[user_id] = _sse_active_counts.get(user_id, 0) + 1
+        logger.debug(f"SSE 连接 +1: user={user_id[:8]}, active={_sse_active_counts[user_id]}")
         try:
             # 发送思考事件
             if rag_context:
@@ -454,6 +469,10 @@ async def chat_query(
         except Exception as e:
             logger.error(f"AI 对话流生成失败: {type(e).__name__}: {e}", exc_info=True)
             yield f"data: {json.dumps({'type': 'error', 'content': f'生成失败: {str(e)}'})}\n\n"
+        finally:
+            # SSE 连接计数 -1（生成器结束时释放，无论正常完成还是异常）
+            _sse_active_counts[user_id] = max(0, _sse_active_counts.get(user_id, 1) - 1)
+            logger.debug(f"SSE 连接 -1: user={user_id[:8]}, active={_sse_active_counts.get(user_id, 0)}")
     
     return StreamingResponse(
         generate_stream(),
@@ -466,7 +485,7 @@ async def chat_query(
     )
 
 
-@router.post("/chat/rag", summary="RAG 查询")
+@router.post("/chat/rag", summary="RAG 查询", dependencies=[Depends(rate_limit(endpoint_limit=10))])
 async def rag_query(
     data: RAGRequest,
     user_id: str = Depends(get_current_user_id),
