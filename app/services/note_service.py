@@ -16,7 +16,7 @@ import uuid
 from datetime import datetime
 from typing import List, Optional, Tuple
 
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import select, update, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logger_handler import logger
@@ -85,6 +85,7 @@ class NoteService:
         # 异步写入 ChromaDB（失败不影响主流程）
         if self.vector_store:
             asyncio.create_task(self._sync_to_vector(note))
+            logger.info(f"ChromaDB 异步写入任务已创建: note_id={note.id}")
         
         # 后台异步生成标签和创建回顾记录（不传入 db，因为请求 session 会在响应返回后关闭）
         asyncio.create_task(self._auto_tag_and_review(note))
@@ -192,6 +193,7 @@ class NoteService:
         
         # 同步更新 ChromaDB 向量
         if self.vector_store:
+            logger.info(f"创建异步写入任务: note_id={note.id}")
             asyncio.create_task(self._sync_to_vector(note))
         
         logger.info(f"笔记更新: note_id={note_id}")
@@ -200,29 +202,99 @@ class NoteService:
     async def delete_note(self, db: AsyncSession, note_id: str, user_id: str) -> None:
         """
         软删除笔记（设置 deleted_at）
-        
+
+        使用直接 SQL UPDATE 而非 ORM 对象修改，确保变更可靠持久化。
         同时从 ChromaDB 中删除对应向量。
-        
+
         Args:
             db: 数据库会话
             note_id: 笔记 ID
             user_id: 用户 ID
         """
+        # 先验证笔记存在（权限校验 + 确保未删除）
         note = await self.get_note(db, note_id, user_id)
-        
-        # 软删除
-        note.deleted_at = datetime.utcnow()
-        await db.flush()
-        
+
+        # 直接 SQL UPDATE —— 绕过 ORM flush 的对象状态跟踪，
+        # 确保 UPDATE 语句一定被发送到数据库连接
+        result = await db.execute(
+            update(Note)
+            .where(and_(Note.id == note_id, Note.user_id == user_id))
+            .values(deleted_at=datetime.utcnow())
+        )
+
+        if result.rowcount == 0:
+            raise BusinessError(code=ErrorCode.NOTE_NOT_FOUND, http_status=404)
+
         # 从 ChromaDB 删除向量
         if self.vector_store:
             try:
                 await self.vector_store.delete_note_vectors(note_id)
+                logger.info(f"ChromaDB 向量删除成功: note_id={note_id}")
             except Exception as e:
                 logger.error(f"ChromaDB 向量删除失败: note_id={note_id}, error={e}")
-        
+
         logger.info(f"笔记软删除: note_id={note_id}")
-    
+
+    async def pin_note(self, db: AsyncSession, note_id: str, user_id: str) -> Note:
+        """
+        置顶笔记
+
+        Args:
+            db: 数据库会话
+            note_id: 笔记 ID
+            user_id: 用户 ID
+
+        Returns:
+            更新后的笔记对象
+        """
+        note = await self.get_note(db, note_id, user_id)
+        note.is_pinned = True
+        note.updated_at = datetime.utcnow()
+        await db.flush()
+        logger.info(f"笔记置顶: note_id={note_id}")
+        return note
+
+    async def unpin_note(self, db: AsyncSession, note_id: str, user_id: str) -> Note:
+        """
+        取消置顶笔记
+
+        Args:
+            db: 数据库会话
+            note_id: 笔记 ID
+            user_id: 用户 ID
+
+        Returns:
+            更新后的笔记对象
+        """
+        note = await self.get_note(db, note_id, user_id)
+        note.is_pinned = False
+        note.updated_at = datetime.utcnow()
+        await db.flush()
+        logger.info(f"笔记取消置顶: note_id={note_id}")
+        return note
+
+    async def move_note(
+        self, db: AsyncSession, note_id: str, user_id: str, category: str
+    ) -> Note:
+        """
+        移动笔记到目标分类
+
+        Args:
+            db: 数据库会话
+            note_id: 笔记 ID
+            user_id: 用户 ID
+            category: 目标分类（必填，已在 schema 层校验）
+
+        Returns:
+            更新后的笔记对象
+        """
+        note = await self.get_note(db, note_id, user_id)
+        note.category = category
+        note.updated_at = datetime.utcnow()
+        await db.flush()
+        logger.info(f"笔记移动分类: note_id={note_id}, category={category}")
+        return note
+
     async def semantic_search(
         self, db: AsyncSession, user_id: str, query: str, top_k: int = 5
     ) -> List[Tuple[Note, float]]:

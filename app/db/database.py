@@ -64,8 +64,12 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     
     每个请求获取独立的 AsyncSession，请求结束后自动关闭。
     自动处理 commit 和 rollback：
-    - 正常执行完毕自动 commit
+    - 正常执行完毕自动 commit（如果路由未显式 commit）
     - 发生异常自动 rollback
+    
+    注意：如果路由已显式 commit，此处的 commit 是空操作（autobegin 新事务），
+    不会影响已持久化的数据。commit 失败时仅记录日志，不传播异常，
+    因为此时响应已构建，传播异常无意义且可能干扰已提交的数据。
     
     Yields:
         AsyncSession: 异步数据库会话
@@ -73,7 +77,17 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_factory() as session:
         try:
             yield session
-            await session.commit()
+            try:
+                await session.commit()
+            except Exception as commit_err:
+                # 路由可能已显式 commit（如批量操作），此处 commit 是 autobegin 空事务。
+                # 如果空事务 commit 失败（连接断开等），已提交的数据不受影响。
+                # 仅记录日志，不传播异常。
+                logger.warning(f"get_db auto-commit 异常（已提交数据不受影响）: {commit_err}")
+                try:
+                    await session.rollback()
+                except Exception:
+                    pass
         except Exception:
             await session.rollback()
             raise

@@ -5,9 +5,9 @@
 """
 
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class NoteCreate(BaseModel):
@@ -83,6 +83,13 @@ class WriteAssistantRequest(BaseModel):
 
 class BatchOperation(BaseModel):
     """批量操作请求"""
-    note_ids: List[str] = Field(..., description="笔记 ID 列表")
-    operation: str = Field(..., description="操作类型：delete / pin / unpin / move")
+    note_ids: List[str] = Field(..., min_length=1, description="笔记 ID 列表")
+    operation: Literal['delete', 'pin', 'unpin', 'move'] = Field(..., description="操作类型")
     target_category: Optional[str] = Field(None, description="目标分类（move 操作时使用）")
+
+    @model_validator(mode='after')
+    def validate_move_category(self):
+        """move 操作必须提供 target_category"""
+        if self.operation == 'move' and not self.target_category:
+            raise ValueError("move 操作必须提供 target_category")
+        return self

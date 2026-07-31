@@ -110,7 +110,7 @@ async def search_notes(
     return success_response(data={
         "query": data.query,
         "results": [
-            {"title": n.title, "content": n.content[:200], "score": s}
+            {"note": NoteResponse.model_validate(n).model_dump(), "score": s}
             for n, s in results
         ]
     })
@@ -122,46 +122,60 @@ async def batch_operation(
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """批量操作笔记（删除/置顶/取消置顶/移动分类）"""
+    """
+    批量操作笔记（删除/置顶/取消置顶/移动分类）
+
+    使用显式 commit 确保变更在响应返回前已持久化到 MySQL。
+    不依赖 get_db() 的 auto-commit，避免 cleanup 阶段异常导致变更丢失。
+    """
     from app.core.logger_handler import logger
     note_service = _get_note_service()
-    
-    success_count = 0
+
+    success_ids = []
     errors = []
-    
+
     for note_id in data.note_ids:
         try:
             if data.operation == 'delete':
                 await note_service.delete_note(db, note_id, user_id)
             elif data.operation == 'pin':
-                note = await note_service.get_note(db, note_id, user_id)
-                note.is_pinned = True
+                await note_service.pin_note(db, note_id, user_id)
             elif data.operation == 'unpin':
-                note = await note_service.get_note(db, note_id, user_id)
-                note.is_pinned = False
+                await note_service.unpin_note(db, note_id, user_id)
             elif data.operation == 'move':
-                note = await note_service.get_note(db, note_id, user_id)
-                note.category = data.target_category
-            success_count += 1
+                await note_service.move_note(db, note_id, user_id, data.target_category)
+            else:
+                raise ValueError(f"未知的操作类型: {data.operation}")
+            success_ids.append(note_id)
         except Exception as e:
-            errors.append(f"{note_id}: {str(e)}")
-    
-    # 显式提交事务，确保变更持久化到 MySQL
-    # 不依赖 get_db() 的尾部 commit，避免异步 ChromaDB 调用后 session 状态异常导致变更丢失
-    if errors:
+            errors.append({"note_id": note_id, "error": str(e)})
+            logger.warning(f"批量操作单条失败: note_id={note_id}, error={e}")
+
+    # ★ 显式 commit：确保变更在响应返回前持久化到 MySQL
+    # commit 后 SQLAlchemy autobegin 开启新事务，get_db() 的后续 commit 是空操作
+    try:
+        await db.commit()
+    except Exception as e:
         await db.rollback()
-        logger.warning(f"批量操作部分失败: operation={data.operation}, success={success_count}, errors={errors}")
-    else:
-        try:
-            await db.commit()
-            logger.info(f"批量操作提交成功: operation={data.operation}, count={success_count}")
-        except Exception as e:
-            await db.rollback()
-            logger.error(f"批量操作提交失败: operation={data.operation}, error={e}")
-            from app.core.failed_response import BusinessError, ErrorCode
-            raise BusinessError(code=ErrorCode.INTERNAL_ERROR, http_status=500, message=f"批量操作提交失败: {e}")
-    
-    return success_response(message=f"批量 {data.operation} 操作完成，成功 {success_count} 篇")
+        logger.error(f"批量操作事务提交失败: operation={data.operation}, error={e}")
+        from app.core.failed_response import BusinessError, ErrorCode
+        raise BusinessError(
+            code=ErrorCode.INTERNAL_ERROR, http_status=500,
+            message=f"批量操作提交失败: {e}"
+        )
+
+    logger.info(
+        f"批量操作完成: operation={data.operation}, "
+        f"success={len(success_ids)}, errors={len(errors)}"
+    )
+
+    return success_response(data={
+        "operation": data.operation,
+        "total": len(data.note_ids),
+        "success_count": len(success_ids),
+        "error_count": len(errors),
+        "errors": errors if errors else None,
+    }, message=f"批量{data.operation}操作完成：成功 {len(success_ids)} 篇，失败 {len(errors)} 篇")
 
 
 @router.post("/note/autocomplete", summary="AI 内联补全")
