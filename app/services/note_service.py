@@ -13,7 +13,7 @@
 
 import asyncio
 import uuid
-from datetime import datetime
+
 from typing import List, Optional, Tuple
 
 from sqlalchemy import select, update, func, and_, or_
@@ -188,9 +188,9 @@ class NoteService:
         for field, value in update_data.items():
             setattr(note, field, value)
         
-        note.updated_at = datetime.utcnow()
+        note.updated_at = func.now()
         await db.flush()
-        
+
         # 同步更新 ChromaDB 向量
         if self.vector_store:
             logger.info(f"创建异步写入任务: note_id={note.id}")
@@ -219,7 +219,7 @@ class NoteService:
         result = await db.execute(
             update(Note)
             .where(and_(Note.id == note_id, Note.user_id == user_id))
-            .values(deleted_at=datetime.utcnow())
+            .values(deleted_at=func.now())   # 设置 deleted_at 为当前时间戳 使用数据库服务时间与其他事件字段保持一致
         )
 
         if result.rowcount == 0:
@@ -249,7 +249,7 @@ class NoteService:
         """
         note = await self.get_note(db, note_id, user_id)
         note.is_pinned = True
-        note.updated_at = datetime.utcnow()
+        note.updated_at = func.now()
         await db.flush()
         logger.info(f"笔记置顶: note_id={note_id}")
         return note
@@ -268,7 +268,7 @@ class NoteService:
         """
         note = await self.get_note(db, note_id, user_id)
         note.is_pinned = False
-        note.updated_at = datetime.utcnow()
+        note.updated_at = func.now()
         await db.flush()
         logger.info(f"笔记取消置顶: note_id={note_id}")
         return note
@@ -290,7 +290,7 @@ class NoteService:
         """
         note = await self.get_note(db, note_id, user_id)
         note.category = category
-        note.updated_at = datetime.utcnow()
+        note.updated_at = func.now()
         await db.flush()
         logger.info(f"笔记移动分类: note_id={note_id}, category={category}")
         return note
@@ -394,7 +394,7 @@ class NoteService:
                     user_id=note.user_id,
                     review_count=0,
                     interval_days=1,
-                    next_review_at=datetime.utcnow(),  # 立即可回顾
+                    next_review_at=func.now(),  # 立即可回顾
                 )
                 new_session.add(review)
                 await new_session.commit()
