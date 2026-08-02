@@ -40,24 +40,33 @@ export default function NoteList() {
   // 删除确认弹窗
   const [deleteTarget, setDeleteTarget] = useState<string | 'batch' | null>(null);
 
-  /** 加载笔记列表 */
+  /** 加载笔记列表（reset=true 时从第 1 页开始，用于搜索/分类切换） */
   const loadNotes = useCallback(async (reset = false) => {
     setLoading(true);
     try {
       const p = reset ? 1 : page;
-      const res = await notesApi.list({ page: p, page_size: 20, category: category || undefined });
-      const data = res.data.data;
-      setNotes(reset ? data.notes : [...notes, ...data.notes]);
-      setTotal(data.total);
-      if (!reset) setPage(p + 1);
+      // 有搜索词时走语义搜索接口，否则走普通列表
+      if (debouncedSearch.trim()) {
+        const res = await notesApi.search({ query: debouncedSearch, top_k: 20 });
+        const results = res.data.data.results || [];
+        setNotes(results.map((r) => r.note));
+        setTotal(results.length);
+        setPage(1);
+      } else {
+        const res = await notesApi.list({ page: p, page_size: 20, category: category || undefined });
+        const data = res.data.data;
+        setNotes(reset ? data.notes : [...notes, ...data.notes]);
+        setTotal(data.total);
+        if (!reset) setPage(p + 1);
+      }
     } catch {
       // 错误处理
     } finally {
       setLoading(false);
     }
-  }, [page, category, notes]);
+  }, [page, category, notes, debouncedSearch]);
 
-  // 初始加载 + 分类变化时重新加载
+  // 初始加载 + 分类/搜索变化时重新加载（始终重置到第 1 页）
   useEffect(() => {
     loadNotes(true);
   }, [category, debouncedSearch]);

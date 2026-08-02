@@ -42,8 +42,12 @@ export default function Settings() {
       toast.error('请填写旧密码和新密码');
       return;
     }
-    if (newPassword.length < 6) {
-      toast.error('新密码至少 6 个字符');
+    if (newPassword.length < 8) {
+      toast.error('新密码至少 8 位');
+      return;
+    }
+    if (!/[a-zA-Z]/.test(newPassword) || !/\d/.test(newPassword)) {
+      toast.error('密码需同时包含字母和数字');
       return;
     }
     if (newPassword !== confirmPassword) {

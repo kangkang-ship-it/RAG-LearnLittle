@@ -113,16 +113,44 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
 
   const captchaCanvasRef = useRef<HTMLCanvasElement>(null);
+  const captchaCodeRef = useRef<string>('');
 
   const refreshCaptcha = useCallback(() => {
     const canvas = captchaCanvasRef.current;
     if (!canvas) return;
-    generateCaptcha(canvas);
+    const code = generateCaptcha(canvas);
+    captchaCodeRef.current = code;
   }, []);
 
   useEffect(() => {
     refreshCaptcha();
   }, [refreshCaptcha]);
+
+  // 记住密码：页面加载时恢复保存的凭证
+  useEffect(() => {
+    const saved = localStorage.getItem('remembered_login');
+    if (saved) {
+      try {
+        const { username: u, password: p } = JSON.parse(saved);
+        setUsername(u || '');
+        setPassword(p || '');
+        setRememberPwd(true);
+      } catch { /* ignore */ }
+    }
+  }, []);
+
+  // 自动登录：如果凭证已恢复且开启了自动登录，自动提交
+  useEffect(() => {
+    const autoLoginFlag = sessionStorage.getItem('auto_login_pending');
+    if (autoLoginFlag && username && password) {
+      sessionStorage.removeItem('auto_login_pending');
+      // 延迟一帧确保组件完全挂载
+      requestAnimationFrame(() => {
+        const form = document.querySelector('form');
+        if (form) form.requestSubmit();
+      });
+    }
+  }, [username, password]);
 
   useEffect(() => {
     if (!localStorage.getItem('device_id')) {
@@ -150,6 +178,26 @@ export default function Login() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!username || !password) return;
+
+    // 验证码校验（不区分大小写）
+    if (!captchaInput || captchaInput.toLowerCase() !== captchaCodeRef.current.toLowerCase()) {
+      toast.error('验证码错误');
+      refreshCaptcha();
+      setCaptchaInput('');
+      return;
+    }
+
+    // 记住密码：将凭证存入 localStorage
+    if (rememberPwd) {
+      localStorage.setItem('remembered_login', JSON.stringify({ username, password }));
+    } else {
+      localStorage.removeItem('remembered_login');
+    }
+
+    // 自动登录标记
+    if (autoLogin) {
+      sessionStorage.setItem('auto_login_pending', '1');
+    }
 
     setLoading(true);
     try {

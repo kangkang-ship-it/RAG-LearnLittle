@@ -60,7 +60,7 @@ export default function NoteEditor() {
     });
     md = md.replace(/<ol[^>]*>([\s\S]*?)<\/ol>/gi, (_, inner) => {
       let idx = 0;
-      return inner.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, () => `${++idx}. $1\n`).trim() + '\n';
+      return inner.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_match: string, p1: string) => `${++idx}. ${p1}\n`).trim() + '\n';
     });
     md = md.replace(/<a[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/gi, '[$2]($1)');
     md = md.replace(/<img[^>]*src="([^"]*)"[^>]*alt="([^"]*)"[^>]*\/?>/gi, '![$2]($1)');

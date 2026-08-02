@@ -125,8 +125,7 @@ export interface NoteSearchRequest {
 
 /** 语义搜索结果项 */
 export interface NoteSearchResult {
-  title: string;
-  content: string;
+  note: Note;
   score: number;
 }
 

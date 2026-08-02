@@ -4,10 +4,12 @@
  * 功能：
  * 1. 统一超时、请求头配置
  * 2. 请求拦截：自动注入 JWT Bearer Token
- * 3. 响应拦截：401 自动登出跳转
+ * 3. 响应拦截：401 自动 refresh → 重试，失败则完整登出跳转
  */
 
 import axios from 'axios';
+import type { AxiosError, InternalAxiosRequestConfig } from 'axios';
+import { useUserStore } from '../stores/useUserStore';
 
 /** 创建 Axios 实例 */
 const client = axios.create({
@@ -35,24 +37,87 @@ client.interceptors.request.use((config) => {
   return config;
 });
 
+/** 是否正在刷新 Token */
+let isRefreshing = false;
+/** 等待刷新完成的请求队列 */
+let pendingQueue: Array<(token: string) => void> = [];
+
 /**
- * 响应拦截器 — 401 自动登出
+ * 响应拦截器 — 401 自动刷新 Token
  * 
- * 捕获 401 响应，清除本地 token 并跳转到登录页。
- * 其他错误原样抛出，由调用方处理。
+ * 流程：
+ * 1. 收到 401 → 检查是否有 refreshToken
+ * 2. 有 → 尝试 refresh，成功后用新 token 重试原请求
+ * 3. refresh 失败 → 完整登出（清 store + 清 localStorage + 跳转）
+ * 4. 无 refreshToken → 直接登出
  */
 client.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem('jwt_token');
-      // 避免在登录页重复跳转
-      if (window.location.pathname !== '/login') {
-        window.location.href = '/login';
+  async (error: AxiosError) => {
+    const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
+
+    // 401 且不是 refresh 请求本身、且没重试过
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      const refreshToken = localStorage.getItem('jwt_refresh_token');
+
+      // 无 refreshToken → 直接登出
+      if (!refreshToken) {
+        handleLogout();
+        return Promise.reject(error);
+      }
+
+      // 已在刷新中 → 排队等待
+      if (isRefreshing) {
+        return new Promise((resolve) => {
+          pendingQueue.push((newToken: string) => {
+            originalRequest.headers.Authorization = `Bearer ${newToken}`;
+            resolve(client(originalRequest));
+          });
+        });
+      }
+
+      originalRequest._retry = true;
+      isRefreshing = true;
+
+      try {
+        const deviceId = localStorage.getItem('device_id') || undefined;
+        const res = await axios.post('/api/v1/auth/refresh', {
+          refresh_token: refreshToken,
+          ...(deviceId ? { device_id: deviceId } : {}),
+        });
+        const { access_token, refresh_token: newRefreshToken } = res.data.data;
+
+        // 更新 store + localStorage
+        useUserStore.getState().updateTokens(access_token, newRefreshToken);
+
+        // 用新 token 重试原请求
+        originalRequest.headers.Authorization = `Bearer ${access_token}`;
+
+        // 通知队列中的请求
+        pendingQueue.forEach((cb) => cb(access_token));
+        pendingQueue = [];
+
+        return client(originalRequest);
+      } catch {
+        // refresh 失败 → 彻底登出
+        pendingQueue = [];
+        handleLogout();
+        return Promise.reject(error);
+      } finally {
+        isRefreshing = false;
       }
     }
+
     return Promise.reject(error);
   }
 );
+
+/** 完整登出：清 store + 跳转登录页 */
+function handleLogout() {
+  useUserStore.getState().logout();
+  if (window.location.pathname !== '/login') {
+    window.location.href = '/login';
+  }
+}
 
 export default client;

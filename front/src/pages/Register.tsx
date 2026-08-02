@@ -30,6 +30,14 @@ export default function Register() {
     e.preventDefault();
 
     // 前端校验
+    if (password.length < 8) {
+      toast.error('密码至少 8 位');
+      return;
+    }
+    if (!/[a-zA-Z]/.test(password) || !/\d/.test(password)) {
+      toast.error('密码需同时包含字母和数字');
+      return;
+    }
     if (password !== confirmPassword) {
       toast.error('两次输入的密码不一致');
       return;
