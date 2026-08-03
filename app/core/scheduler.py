@@ -1,0 +1,71 @@
+"""
+定时任务调度器
+
+使用 APScheduler 管理周期性后台任务：
+- 每天凌晨 3:00 清理过期笔记（deleted_at 超过 14 天 → 物理删除 + 清理 ChromaDB 向量）
+
+⚠️ reload 防护：uvicorn reload 模式会 fork 子进程，若父/子进程各启动一个 scheduler，
+同一清理任务每天会执行两次。因此 init_scheduler() 仅由 main.py 在非 reload 模式下调用。
+"""
+
+import logging
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+
+from app.core.logger_handler import logger
+
+# 回收站自动清理阈值（天）——与 app/routers/note_router.py 的 RECYCLE_BIN_CLEANUP_DAYS 保持一致
+CLEANUP_EXPIRED_DAYS = 14
+
+scheduler = AsyncIOScheduler()
+
+
+async def cleanup_expired_notes() -> int:
+    """
+    清理过期笔记（deleted_at 超过 14 天）→ 返回删除数量
+
+    运行在请求上下文之外，需自行获取数据库会话和 NoteService 实例：
+    - DB session：通过 async_session_factory 获取独立会话
+    - NoteService：优先复用 init_manager.note_service（含 vector_store 与 chat_model），
+      后台初始化未完成时降级为裸 NoteService（跳过向量清理，下次运行补清）
+    """
+    from app.db.database import async_session_factory
+    from main import init_manager
+
+    note_service = init_manager.note_service
+    if note_service is None:
+        from app.services.note_service import NoteService
+        note_service = NoteService()
+
+    async with async_session_factory() as db:
+        try:
+            count = await note_service.cleanup_expired_notes(db, days=CLEANUP_EXPIRED_DAYS)
+            await db.commit()
+            logger.info(f"定时清理过期笔记完成: 删除 {count} 条")
+            return count
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"定时清理过期笔记失败: {e}")
+            raise
+
+
+def init_scheduler() -> None:
+    """初始化并启动定时任务（仅在非 reload 模式下由 main.py 调用）"""
+    scheduler.add_job(
+        cleanup_expired_notes,
+        trigger=CronTrigger(hour=3, minute=0),
+        id="cleanup_expired_notes",
+        name="清理过期笔记",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    scheduler.start()
+    logger.info("定时任务调度器已启动（每日 03:00 清理回收站过期笔记）")
+
+
+def shutdown_scheduler() -> None:
+    """关闭定时任务调度器（wait=False 避免阻塞应用关闭流程）"""
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
+        logger.info("定时任务调度器已关闭")

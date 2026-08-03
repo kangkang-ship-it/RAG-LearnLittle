@@ -30,6 +30,8 @@ class ErrorCode:
     INVALID_PARAMETER = 40003           # 参数值无效
     FILE_TOO_LARGE = 40004              # 文件超过大小限制
     UNSUPPORTED_FILE_TYPE = 40005       # 不支持的文件类型
+    EMAIL_CODE_INVALID = 40006          # 邮箱验证码错误或已过期
+    EMAIL_SEND_FAILED = 40007           # 邮件发送失败
     
     # 401xx - 认证失败
     TOKEN_EXPIRED = 40101               # Access Token 已过期
@@ -53,6 +55,7 @@ class ErrorCode:
     # 409xx - 冲突
     USERNAME_EXISTS = 40901             # 用户名已存在
     IDEMPOTENCY_DUPLICATE = 40902       # 幂等键重复（消息重复提交）
+    EMAIL_EXISTS = 40903                # 邮箱已被占用
     
     # 429xx - 限流
     GLOBAL_RATE_LIMIT = 42901           # 全局频率限制
@@ -70,6 +73,8 @@ _ERROR_MESSAGES = {
     ErrorCode.INVALID_PARAMETER: "参数值无效",
     ErrorCode.FILE_TOO_LARGE: "文件超过大小限制",
     ErrorCode.UNSUPPORTED_FILE_TYPE: "不支持的文件类型",
+    ErrorCode.EMAIL_CODE_INVALID: "验证码错误或已过期",
+    ErrorCode.EMAIL_SEND_FAILED: "邮件发送失败，请稍后重试",
     ErrorCode.TOKEN_EXPIRED: "Access Token 已过期",
     ErrorCode.TOKEN_INVALID: "Token 无效",
     ErrorCode.PASSWORD_ERROR: "密码错误",
@@ -85,6 +90,7 @@ _ERROR_MESSAGES = {
     ErrorCode.DEVICE_SESSION_NOT_FOUND: "设备会话不存在",
     ErrorCode.USERNAME_EXISTS: "用户名已存在",
     ErrorCode.IDEMPOTENCY_DUPLICATE: "请求重复提交",
+    ErrorCode.EMAIL_EXISTS: "该邮箱已被使用",
     ErrorCode.GLOBAL_RATE_LIMIT: "请求频率过高，请稍后再试",
     ErrorCode.ENDPOINT_RATE_LIMIT: "该接口请求频率过高，请稍后再试",
     ErrorCode.INTERNAL_ERROR: "服务器内部错误",

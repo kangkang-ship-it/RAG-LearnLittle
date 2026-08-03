@@ -60,6 +60,14 @@ class BackgroundInitManager:
         self.note_service = None
         self.reorder_service = None
         self.rag_service = None  # RAG 服务（阶段 3 后创建）
+        # EmailService：仅读取环境变量，不涉及异步 I/O 或重型资源，
+        # 在 __init__ 中即可初始化（失败仅告警，邮件功能不可用）
+        try:
+            from app.services.email_service import EmailService
+            self.email_service = EmailService()
+        except Exception as e:
+            logger.warning(f"EmailService 初始化失败（邮件功能不可用）: {e}")
+            self.email_service = None
     
     async def run(self):
         """
@@ -217,13 +225,26 @@ async def lifespan(app: FastAPI):
     
     # 4. 后台异步初始化重型资源
     asyncio.create_task(init_manager.run())
-    
+
+    # 5. 启动定时任务（reload 模式跳过，避免 uvicorn fork 子进程导致重复执行）
+    reload = os.getenv("UVICORN_RELOAD", "true").lower() not in ("false", "0", "no")
+    if not reload:
+        from app.core.scheduler import init_scheduler
+        init_scheduler()
+        logger.info("定时任务调度器已启动（非 reload 模式）")
+    else:
+        logger.info("检测到 reload 模式，跳过 scheduler 启动（避免重复执行）")
+
     logger.info("应用启动完成，后台初始化进行中...")
-    
+
     yield
-    
+
     # ===== 关闭阶段 =====
     logger.info("应用关闭中...")
+    # 关闭定时任务调度器（wait=False 避免阻塞关闭流程）
+    if not reload:
+        from app.core.scheduler import shutdown_scheduler
+        shutdown_scheduler()
     # 关闭共享 httpx 连接池
     from app.utils.factory import close_shared_http_client
     await close_shared_http_client()

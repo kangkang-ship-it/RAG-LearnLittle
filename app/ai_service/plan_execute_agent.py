@@ -183,7 +183,10 @@ def _resolve_step_tool_groups(step: PlanStep) -> Optional[List[str]]:
     matched_groups = ["base"]  # 始终包含基础组
     group = tool_to_group.get(step.tool)
     if group is None:
-        logger.warning(f"步骤 {step.step} 工具 '{step.tool}' 未匹配到任何工具组，使用默认组")
+        # 工具名未匹配到任何组（如模型输出了未知工具名）→ 回退关键词路由，
+        # 由 execute_agent 按 default_groups（全量）加载，避免步骤无工具可用
+        logger.warning(f"步骤 {step.step} 工具 '{step.tool}' 未匹配到任何工具组，回退关键词路由（全量组）")
+        return None
     elif group != "base" and group not in matched_groups:
         matched_groups.append(group)
         logger.debug(f"步骤 {step.step} 工具路由: tool='{step.tool}' → 工具组 {matched_groups}")
@@ -201,6 +204,7 @@ async def _execute_step(
     db_session_factory,
     note_service,
     review_service,
+    email_service,
     step_timeout: int,
     previous_results: Dict[int, str],
 ) -> AsyncGenerator[Dict[str, Any], None]:
@@ -244,6 +248,7 @@ async def _execute_step(
                 db_session_factory=db_session_factory,
                 note_service=note_service,
                 review_service=review_service,
+                email_service=email_service,
                 timeout=step_timeout,
                 override_groups=step_tool_groups,
             ):
@@ -300,6 +305,7 @@ async def _execute_batch(
     db_session_factory,
     note_service,
     review_service,
+    email_service,
     config: dict,
     previous_results: Dict[int, str],
 ) -> AsyncGenerator[Dict[str, Any], None]:
@@ -323,7 +329,7 @@ async def _execute_batch(
                 async for event in _execute_step(
                     step, chat_model, user_id, user_message, system_prompt,
                     compressed_messages, db_session_factory, note_service,
-                    review_service, step_timeout, previous_results,
+                    review_service, email_service, step_timeout, previous_results,
                 ):
                     await queue.put(event)
             except Exception as e:
@@ -354,7 +360,7 @@ async def _execute_batch(
             async for event in _execute_step(
                 step, chat_model, user_id, user_message, system_prompt,
                 compressed_messages, db_session_factory, note_service,
-                review_service, step_timeout, previous_results,
+                review_service, email_service, step_timeout, previous_results,
             ):
                 yield event
             previous_results[step.step] = step.result
@@ -430,6 +436,7 @@ async def execute_plan_agent(
     db_session_factory=None,
     note_service=None,
     review_service=None,
+    email_service=None,
     timeout: int = 120,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
@@ -447,6 +454,7 @@ async def execute_plan_agent(
         db_session_factory: 数据库会话工厂
         note_service: 笔记服务实例
         review_service: 回顾服务实例
+        email_service: 邮件发送服务实例（供 send_email 工具使用）
         timeout: 总超时秒数
 
     Yields:
@@ -489,7 +497,7 @@ async def execute_plan_agent(
 
             completed_steps = 0
             for batch in batches:               # 逐批执行
-                async for event in _execute_batch(             # 异步执行批次 
+                async for event in _execute_batch(             # 异步执行批次
                     batch=batch,
                     chat_model=chat_model,
                     user_id=user_id,
@@ -499,6 +507,7 @@ async def execute_plan_agent(
                     db_session_factory=db_session_factory,     # 数据库会话工厂
                     note_service=note_service,                 # 笔记服务实例
                     review_service=review_service,             # 回顾服务实例
+                    email_service=email_service,               # 邮件发送服务实例
                     config=config,                             # 配置字典
                     previous_results=previous_results,         # 已完成步骤结果
                 ):

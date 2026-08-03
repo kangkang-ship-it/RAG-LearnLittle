@@ -76,9 +76,10 @@ tool_groups:
   base:
     - what_time_is_now
     - get_user_info_tools
-  # 笔记读取组（搜索/统计/推荐）
+  # 笔记读取组（搜索/完整内容/统计/推荐）
   note_read:
     - search_notes_tool
+    - get_note_content_tool
     - get_note_stats_tool
     - get_related_notes_tool
   # 笔记写入组（创建/更新笔记）
@@ -89,17 +90,22 @@ tool_groups:
   review:
     - get_today_reviews_tool
     - mark_reviewed_tool
+  # 邮箱组（发送邮件，低频操作按需加载，不进 default_groups 以节省上下文窗口）
+  email:
+    - send_email
 
 # 工具路由规则（关键词 → 工具组映射）
 tool_routing:
   # 默认加载的工具组（未命中任何关键词时使用）
-  # 全量加载：让 LLM 自己决定使用哪个工具，关键词规则仅作为加速补充，
+  # 全量加载（含 email）：让 LLM 自己决定使用哪个工具，关键词规则仅作为加速补充，
   # 避免关键词穷举不完整导致"想用工具却没有"的问题。
+  # 系统提示词已约束"仅当用户要求发送邮件时才调用 send_email"。
   default_groups:
     - base
     - note_read
     - note_write
     - review
+    - email
   # 关键词 → 工具组映射（命中后追加对应组）
   keyword_rules:
     note_write:
@@ -148,6 +154,19 @@ tool_routing:
       - "有哪些"
       - "关联"
       - "推荐"
+    email:
+      - "发送邮件"
+      - "发邮件"
+      - "发到邮箱"
+      - "发送到邮箱"
+      - "导出到邮箱"
+      - "邮件发送"
+      - "发送到"
+      - "发送至"
+      - "发给"
+      - "发到"
+      - "转发"
+      - "email"
 
 # 记忆压缩配置
 memory_compression:

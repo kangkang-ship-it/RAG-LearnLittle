@@ -23,6 +23,7 @@ const AIChat = lazy(() => import('../pages/AIChat'));
 const Sessions = lazy(() => import('../pages/Sessions'));
 const KnowledgeBase = lazy(() => import('../pages/KnowledgeBase'));
 const DailyReview = lazy(() => import('../pages/DailyReview'));
+const RecycleBin = lazy(() => import('../pages/RecycleBin'));
 const Profile = lazy(() => import('../pages/Profile'));
 const Settings = lazy(() => import('../pages/Settings'));
 const AboutUs = lazy(() => import('../pages/AboutUs'));
@@ -91,6 +92,10 @@ export const routes: RouteObject[] = [
       {
         path: '/review',
         element: <LazyPage><DailyReview /></LazyPage>,
+      },
+      {
+        path: '/recycle-bin',
+        element: <LazyPage><RecycleBin /></LazyPage>,
       },
       {
         path: '/profile',

@@ -20,7 +20,21 @@ export interface ApiResponse<T = unknown> {
 export interface UserRegister {
   username: string;
   password: string;
-  email?: string;
+  /** 邮箱（必填，需通过验证码验证） */
+  email: string;
+  /** 6 位邮箱验证码 */
+  verification_code: string;
+}
+
+/** 发送邮箱验证码请求（注册 / 修改邮箱复用） */
+export interface SendCodeRequest {
+  email: string;
+}
+
+/** 修改邮箱请求 */
+export interface EmailChangeRequest {
+  email: string;
+  verification_code: string;
 }
 
 /** 用户登录请求 */
@@ -48,16 +62,17 @@ export interface UserInfo {
   uuid: string;
   username: string;
   email: string | null;
+  /** 邮箱是否已验证 */
+  email_verified: boolean;
   avatar: string | null;
   bio: string | null;
   status: string;
   created_at: string;
 }
 
-/** 用户信息更新 */
+/** 用户信息更新（email 已移除 → 邮箱变更请使用 EmailChangeRequest） */
 export interface UserUpdate {
   bio?: string;
-  email?: string;
 }
 
 /** 密码修改 */
@@ -89,6 +104,21 @@ export interface Note {
   is_pinned: boolean;
   created_at: string;
   updated_at: string;
+  /** 删除时间（回收站中的笔记有值，正常笔记为 null） */
+  deleted_at?: string | null;
+}
+
+/** 回收站笔记响应（附带距离自动彻底删除的剩余天数） */
+export interface DeletedNote extends Note {
+  days_remaining: number;
+}
+
+/** 回收站列表响应 */
+export interface DeletedNoteListResponse {
+  notes: DeletedNote[];
+  total: number;
+  page: number;
+  page_size: number;
 }
 
 /** 创建笔记请求 */
@@ -132,7 +162,7 @@ export interface NoteSearchResult {
 /** 批量操作请求 */
 export interface BatchOperation {
   note_ids: string[];
-  operation: 'delete' | 'pin' | 'unpin' | 'move';
+  operation: 'delete' | 'pin' | 'unpin' | 'move' | 'permanent_delete' | 'restore';
   target_category?: string;
 }
 

@@ -1,18 +1,21 @@
 """
 Agent 工具集
 
-定义 Agent 可使用的 9 个异步工具：
+定义 Agent 可使用的 11 个异步工具：
 1. what_time_is_now - 获取当前时间
-2. get_user_info_tools - 从 JWT 解析用户信息
-3. search_notes_tool - 语义搜索笔记
-4. get_note_stats_tool - 笔记分类统计
-5. get_today_reviews_tool - 获取今日待回顾笔记
-6. mark_reviewed_tool - 标记回顾完成
-7. create_note_tool - 创建新笔记
-8. update_note_tool - 更新已有笔记
-9. get_related_notes_tool - 获取关联推荐
+2. get_user_info_tools - 获取当前用户基本信息（用户名、邮箱、ID）
+3. search_notes_tool - 语义搜索笔记（返回 200 字符摘要）
+4. get_note_content_tool - 获取单篇笔记完整内容（邮件发送/导出用）
+5. get_note_stats_tool - 笔记分类统计
+6. get_today_reviews_tool - 获取今日待回顾笔记
+7. mark_reviewed_tool - 标记回顾完成
+8. create_note_tool - 创建新笔记
+9. update_note_tool - 更新已有笔记
+10. get_related_notes_tool - 获取关联推荐
+11. send_email - 发送邮件（笔记转 Markdown/PDF 附件发送到用户邮箱）
 """
 
+import re
 from datetime import datetime
 from typing import Optional, List
 
@@ -26,6 +29,7 @@ def create_agent_tools(
     note_service=None,
     review_service=None,
     db_session_factory=None,
+    email_service=None,
     groups: Optional[List[str]] = None,
 ):
     """
@@ -40,12 +44,17 @@ def create_agent_tools(
         note_service: 笔记服务实例
         review_service: 回顾服务实例
         db_session_factory: 数据库会话工厂
+        email_service: 邮件发送服务实例（send_email 工具使用）
         groups: 要加载的工具组名称列表（如 ["base", "note_read"]）。
                 None 表示加载全部工具。
 
     Returns:
         工具列表
     """
+
+    # 用户信息延迟缓存：首次调用 get_user_info_tools 时查询数据库，
+    # 后续调用命中缓存。始终初始化，避免 db_session_factory 为 None 时 nonlocal 引用报错
+    _user_cache = {"fetched": False, "user": None}
 
     @tool
     async def what_time_is_now() -> str:
@@ -55,13 +64,31 @@ def create_agent_tools(
 
     @tool
     async def get_user_info_tools() -> str:
-        """获取当前登录用户的基本信息"""
-        return f"当前用户 ID: {user_id}"
+        """获取当前登录用户的基本信息（用户名、邮箱、用户ID）"""
+        nonlocal _user_cache
+        if not _user_cache["fetched"]:
+            if db_session_factory:
+                from sqlalchemy import select
+                from app.models.user import User
+
+                async with db_session_factory() as db:
+                    result = await db.execute(select(User).where(User.uuid == user_id))
+                    _user_cache["user"] = result.scalar_one_or_none()
+            _user_cache["fetched"] = True
+
+        user = _user_cache["user"]
+        if user:
+            email_info = user.email if user.email else "未设置邮箱"
+            return f"用户名: {user.username}\n邮箱: {email_info}\n用户ID: {user_id}"
+        return f"当前用户 ID: {user_id}（用户信息获取失败）"
 
     @tool
     async def search_notes_tool(query: str, top_k: int = 5) -> str:
         """
         语义搜索用户的笔记
+
+        注意：返回的笔记内容仅为摘要（前 200 字符）。若需要单篇笔记的完整内容
+        （如导出、发送邮件），请先搜索获取 note_id，再调用 get_note_content_tool。
 
         Args:
             query: 搜索关键词
@@ -81,6 +108,47 @@ def create_agent_tools(
                 output.append(f"[{score:.2f}] ID:{note.id} | {note.title}\n{note.content[:200]}...")
 
             return "\n\n---\n\n".join(output)
+
+    @tool
+    async def get_note_content_tool(note_id: str) -> str:
+        """
+        获取单篇笔记的完整内容（Markdown，含标题、分类/标签元信息和全部正文）。
+
+        发送邮件、导出等需要完整内容的场景，必须先用 search_notes_tool 搜索
+        目标笔记获取 note_id，再调用本工具获取完整内容。
+        注意：search_notes_tool 只返回 200 字符摘要，不得直接用作邮件正文。
+
+        Args:
+            note_id: 笔记 ID（可通过 search_notes_tool 搜索获取）
+        """
+        if not db_session_factory or not note_service:
+            return "服务未初始化"
+
+        # 完整内容上限（超出部分截断并明确提示，保护上下文窗口）
+        MAX_CONTENT_CHARS = 50000
+
+        async with db_session_factory() as db:
+            try:
+                note = await note_service.get_note(db, note_id, user_id)
+            except Exception as e:
+                return f"未找到笔记: {str(e)}"
+
+        content = note.content or ""
+        truncated = len(content) > MAX_CONTENT_CHARS
+        if truncated:
+            content = content[:MAX_CONTENT_CHARS]
+
+        tags_str = ",".join(note.tags or []) or "无"
+        updated_str = note.updated_at.strftime("%Y-%m-%d") if note.updated_at else "未知"
+        header = (
+            f"# {note.title}\n\n"
+            f"> 分类：{note.category or '未分类'} | 标签：{tags_str} | 更新日期：{updated_str}\n\n"
+            f"---\n\n"
+        )
+        result_str = header + content
+        if truncated:
+            result_str += f"\n\n[提示：笔记内容超过 {MAX_CONTENT_CHARS} 字符，已截断]"
+        return result_str
 
     @tool
     async def get_note_stats_tool() -> str:
@@ -231,32 +299,65 @@ def create_agent_tools(
 
             return "相关笔记:\n" + "\n".join(output)
 
-     # TODO: 未来可以增加一个 send_email 工具，允许 LLM 直接发送邮件通知用户
-    async def send_email(to: str, subject: str, body: str) -> str:
+    @tool
+    async def send_email(to: str, subject: str, body: str, format: str = "md") -> str:
         """
-        发送邮件
-        当用户明确需要发送邮件功能时LLM可以调用这个工具来发送邮件
+        发送邮件。这是唯一能真正把邮件发送出去的工具：当用户要求将笔记发送到邮箱时，必须调用本工具完成发送，
+        不得仅用文字回复代替。支持以 Markdown 或 PDF 附件形式发送。
+
+        调用前请先通过 get_user_info_tools 获取用户邮箱；
+        若用户未绑定邮箱，请先询问用户要发送到的目标邮箱地址。
 
         Args:
-            to: 收件人邮箱
-            subject: 邮件主题
-            body: 邮件正文
+            to: 收件人邮箱地址（必须与用户确认过）
+            subject: 邮件主题（如 "笔记导出：{笔记标题}"）
+            body: 邮件正文（Markdown 格式，建议包含笔记标题、分类/标签元信息和完整内容）
+            format: 附件格式："md"（Markdown 附件，默认）/ "pdf"（PDF 附件）/ "text"（仅正文，无附件）
         """
-        # 这里可以集成实际的邮件发送服务，如 SMTP、SendGrid 等
-        # 目前仅返回模拟结果
-        return f"邮件已发送至 {to}，主题: {subject}"
+        if not email_service:
+            return "邮件服务未初始化，请联系管理员"
+        try:
+            attachments = None
+            if format == "pdf":
+                try:
+                    pdf_bytes = email_service.render_markdown_pdf(subject, body)
+                    attachments = [{
+                        "filename": f"{re.sub(r'[\\\\/:*?\"<>|]', '_', subject)}.pdf",
+                        "data": pdf_bytes,
+                        "mime": "application/pdf",
+                    }]
+                except Exception as e:
+                    # PDF 生成失败 → 降级为 Markdown 附件
+                    logger.error(f"PDF 生成失败，降级为 MD 附件: {e}")
+                    format = "md"
+            if format == "md":
+                attachments = attachments or [{
+                    "filename": f"{re.sub(r'[\\\\/:*?\"<>|]', '_', subject)}.md",
+                    "data": body.encode("utf-8"),
+                    "mime": "text/markdown",
+                }]
+
+            await email_service.send_email(to, subject, body, attachments=attachments)
+            fmt_label = {"md": "Markdown", "pdf": "PDF", "text": "文本"}.get(format, "Markdown")
+            return f"笔记已成功以{fmt_label}形式发送至 {to}"
+        except Exception as e:
+            # 捕获所有异常返回友好提示，防止 SMTP 异常冒泡导致 Agent 循环中断
+            logger.error(f"邮件发送失败: to={to}, error={e}")
+            return f"邮件发送失败：{e}。请检查邮箱地址是否正确，或稍后重试。"
 
     # 全部工具注册表（名称 → 工具对象）
     all_tools = {
         "what_time_is_now": what_time_is_now,
         "get_user_info_tools": get_user_info_tools,
         "search_notes_tool": search_notes_tool,
+        "get_note_content_tool": get_note_content_tool,
         "get_note_stats_tool": get_note_stats_tool,
         "get_today_reviews_tool": get_today_reviews_tool,
         "mark_reviewed_tool": mark_reviewed_tool,
         "create_note_tool": create_note_tool,
         "update_note_tool": update_note_tool,
         "get_related_notes_tool": get_related_notes_tool,
+        "send_email": send_email,
     }
 
     # 按需加载：根据 groups 过滤工具   TODO: 未来可以增加工具组的动态注册机制，允许用户自定义工具组

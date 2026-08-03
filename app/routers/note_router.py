@@ -11,18 +11,24 @@
 - POST /note/batch - 批量操作
 - POST /note/autocomplete - AI 内联补全
 - POST /note/write-assistant - AI 写作辅助
+- GET /note/recycle-bin - 回收站列表
+- POST /note/{note_id}/restore - 恢复笔记
+- DELETE /note/{note_id}/permanent - 彻底删除笔记
 """
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.failed_response import BusinessError, ErrorCode
 from app.core.success_response import success_response
 from app.core.rate_limit import rate_limit
 from app.db.database import get_db
+from app.db.redis_client import get_redis
 from app.schemas.note import (
     NoteCreate, NoteUpdate, NoteResponse, NoteListResponse,
     NoteSearchRequest, NoteSearchResponse, BatchOperation,
     AutocompleteRequest, WriteAssistantRequest,
+    DeletedNoteListResponse, DeletedNoteResponse,
 )
 from app.utils.auth_utils import get_current_user_id
 router = APIRouter()
@@ -65,6 +71,40 @@ async def list_notes(
     ).model_dump())
 
 
+# ========== 回收站 ==========
+# ⚠️ 静态路径必须注册在动态路径（/note/{note_id}）之前，
+# 否则 Starlette 按注册顺序匹配，"recycle-bin" 会被 {note_id} 捕获
+
+# 回收站自动清理阈值（天），与 scheduler 定时任务保持一致
+RECYCLE_BIN_CLEANUP_DAYS = 14
+
+
+@router.get("/note/recycle-bin", summary="回收站列表")
+async def list_recycle_bin(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """分页获取回收站中的已删除笔记（按删除时间倒序，附带剩余清理天数）"""
+    from datetime import datetime as dt
+
+    notes, total = await _get_note_service().list_deleted_notes(db, user_id, page, page_size)
+    now = dt.now()
+
+    items = []
+    for n in notes:
+        base = NoteResponse.model_validate(n).model_dump()
+        days_elapsed = (now - n.deleted_at).days if n.deleted_at else RECYCLE_BIN_CLEANUP_DAYS
+        items.append(DeletedNoteResponse(
+            **base, days_remaining=max(0, RECYCLE_BIN_CLEANUP_DAYS - days_elapsed),
+        ))
+
+    return success_response(data=DeletedNoteListResponse(
+        notes=items, total=total, page=page, page_size=page_size,
+    ).model_dump())
+
+
 @router.get("/note/{note_id}", summary="笔记详情")
 async def get_note(
     note_id: str,
@@ -99,6 +139,48 @@ async def delete_note(
     return success_response(message="笔记已删除")
 
 
+# ========== 回收站：恢复 / 彻底删除 ==========
+
+
+@router.post("/note/{note_id}/restore", summary="恢复笔记")
+async def restore_note(
+    note_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """从回收站恢复笔记（清除 deleted_at + 重建 ChromaDB 向量）"""
+    await _get_note_service().restore_note(db, note_id, user_id)
+    return success_response(message="笔记已恢复")
+
+
+@router.delete("/note/{note_id}/permanent", summary="彻底删除笔记")
+async def permanent_delete_note(
+    note_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    彻底删除笔记（物理删除 MySQL 记录 + ChromaDB 向量，级联删除回顾记录，不可恢复）
+
+    每用户 30 次/分钟限流（Redis 计数器手动实现，rate_limit 装饰器不支持自定义窗口）。
+    """
+    # 每用户 30 次/分钟 限流
+    redis = get_redis()
+    key = f"perm_delete:{user_id}"
+    count = await redis.incr(key)
+    if count == 1:
+        await redis.expire(key, 60)
+    if count > 30:
+        raise BusinessError(
+            code=ErrorCode.ENDPOINT_RATE_LIMIT,
+            message="操作过于频繁，请稍后再试",
+            http_status=429,
+        )
+
+    await _get_note_service().permanent_delete(db, note_id, user_id)
+    return success_response(message="笔记已彻底删除")
+
+
 @router.post("/note/search", summary="语义搜索")
 async def search_notes(
     data: NoteSearchRequest,
@@ -123,7 +205,7 @@ async def batch_operation(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    批量操作笔记（删除/置顶/取消置顶/移动分类）
+    批量操作笔记（删除/置顶/取消置顶/移动分类/恢复/彻底删除）
 
     使用显式 commit 确保变更在响应返回前已持久化到 MySQL。
     不依赖 get_db() 的 auto-commit，避免 cleanup 阶段异常导致变更丢失。
@@ -144,6 +226,10 @@ async def batch_operation(
                 await note_service.unpin_note(db, note_id, user_id)
             elif data.operation == 'move':
                 await note_service.move_note(db, note_id, user_id, data.target_category)
+            elif data.operation == 'permanent_delete':
+                await note_service.permanent_delete(db, note_id, user_id)
+            elif data.operation == 'restore':
+                await note_service.restore_note(db, note_id, user_id)
             else:
                 raise ValueError(f"未知的操作类型: {data.operation}")
             success_ids.append(note_id)

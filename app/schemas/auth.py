@@ -4,18 +4,30 @@
 定义用户注册、登录、Token 刷新等接口的请求和响应模型。
 """
 
+import re
 from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
+
+# 邮箱格式校验（QQ/163/Gmail 等通用）
+_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+
+
+def validate_email_format(v: str) -> str:
+    """通用邮箱格式校验器"""
+    if not _EMAIL_RE.match(v):
+        raise ValueError("邮箱格式不正确")
+    return v
 
 
 class UserRegister(BaseModel):
     """用户注册请求"""
     username: str = Field(..., min_length=3, max_length=50, description="用户名")
     password: str = Field(..., min_length=8, max_length=128, description="密码")
-    email: Optional[str] = Field(None, description="邮箱（可选）")
-    
+    email: str = Field(..., description="邮箱（必填，需通过验证码验证）")
+    verification_code: str = Field(..., min_length=6, max_length=6, description="6 位邮箱验证码")
+
     @field_validator("username")
     @classmethod
     def validate_username(cls, v: str) -> str:
@@ -23,7 +35,12 @@ class UserRegister(BaseModel):
         if not v.replace("_", "").isalnum():
             raise ValueError("用户名只能包含字母、数字和下划线")
         return v
-    
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        return validate_email_format(v)
+
     @field_validator("password")
     @classmethod
     def validate_password(cls, v: str) -> str:
@@ -33,6 +50,27 @@ class UserRegister(BaseModel):
         if not any(c.isdigit() for c in v):
             raise ValueError("密码必须包含数字")
         return v
+
+
+class SendCodeRequest(BaseModel):
+    """发送邮箱验证码请求（注册 / 修改邮箱复用）"""
+    email: str = Field(..., description="邮箱地址")
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        return validate_email_format(v)
+
+
+class EmailChangeRequest(BaseModel):
+    """修改邮箱请求（两步流程第二步：提交新邮箱 + 验证码）"""
+    email: str = Field(..., description="新邮箱地址")
+    verification_code: str = Field(..., min_length=6, max_length=6, description="邮箱验证码")
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        return validate_email_format(v)
 
 
 class UserLogin(BaseModel):
@@ -69,9 +107,12 @@ class SessionInfo(BaseModel):
 
 
 class UserUpdate(BaseModel):
-    """用户信息更新请求"""
+    """用户信息更新请求
+
+    注意：email 字段已移除 —— 邮箱变更必须走 POST /user/change-email 验证流程，
+    防止绕过验证码直接修改邮箱。
+    """
     bio: Optional[str] = Field(None, max_length=500, description="个人简介")
-    email: Optional[str] = Field(None, description="邮箱")
 
 
 class PasswordChange(BaseModel):
@@ -95,9 +136,10 @@ class UserInfo(BaseModel):
     uuid: str
     username: str
     email: Optional[str] = None
+    email_verified: bool = False
     avatar: Optional[str] = None
     bio: Optional[str] = None
     status: str
     created_at: datetime
-    
+
     model_config = {"from_attributes": True}

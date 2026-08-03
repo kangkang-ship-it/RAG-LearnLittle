@@ -39,8 +39,22 @@ class NoteResponse(BaseModel):
     is_pinned: bool
     created_at: datetime
     updated_at: datetime
-    
+    deleted_at: Optional[datetime] = None   # 删除时间（回收站展示用，正常笔记为 None）
+
     model_config = {"from_attributes": True}
+
+
+class DeletedNoteResponse(NoteResponse):
+    """回收站笔记响应（继承 NoteResponse，附带剩余清理天数）"""
+    days_remaining: int = Field(..., description="距离自动彻底删除的剩余天数")
+
+
+class DeletedNoteListResponse(BaseModel):
+    """回收站列表响应（分页）"""
+    notes: List[DeletedNoteResponse]
+    total: int
+    page: int
+    page_size: int
 
 
 class NoteListResponse(BaseModel):
@@ -84,7 +98,9 @@ class WriteAssistantRequest(BaseModel):
 class BatchOperation(BaseModel):
     """批量操作请求"""
     note_ids: List[str] = Field(..., min_length=1, description="笔记 ID 列表")
-    operation: Literal['delete', 'pin', 'unpin', 'move'] = Field(..., description="操作类型")
+    operation: Literal['delete', 'pin', 'unpin', 'move', 'permanent_delete', 'restore'] = Field(
+        ..., description="操作类型"
+    )
     target_category: Optional[str] = Field(None, description="目标分类（move 操作时使用）")
 
     @model_validator(mode='after')
@@ -92,4 +108,15 @@ class BatchOperation(BaseModel):
         """move 操作必须提供 target_category"""
         if self.operation == 'move' and not self.target_category:
             raise ValueError("move 操作必须提供 target_category")
+        return self
+
+    @model_validator(mode='after')
+    def validate_operation_limits(self):
+        """批量操作安全校验"""
+        # ① 批量彻底删除上限 50 条（防止误操作大规模删除）
+        if self.operation == 'permanent_delete' and len(self.note_ids) > 50:
+            raise ValueError("单次批量彻底删除最多 50 条笔记")
+        # ② 批量恢复上限 100 条
+        if self.operation == 'restore' and len(self.note_ids) > 100:
+            raise ValueError("单次批量恢复最多 100 条笔记")
         return self

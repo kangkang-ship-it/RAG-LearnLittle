@@ -17,6 +17,10 @@ export const authApi = {
   login: (data: UserLogin) =>
     client.post<ApiResponse<TokenResponse>>(endpoints.auth.login, data),
 
+  /** 发送邮箱验证码（注册 / 修改邮箱复用） */
+  sendVerificationCode: (email: string) =>
+    client.post<ApiResponse<null>>(endpoints.auth.sendCode, { email }),
+
   /**
    * 用户登出
    * @param deviceId 可选，传入则只撤销当前设备会话；不传则撤销所有

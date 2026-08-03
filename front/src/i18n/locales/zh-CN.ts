@@ -8,6 +8,7 @@ const zh = {
   'nav.chat': 'AI 对话',
   'nav.sessions': '对话历史',
   'nav.review': '每日回顾',
+  'nav.recycle_bin': '回收站',
   'nav.knowledge': '知识库',
   'nav.profile': '个人信息',
   'nav.settings': '设置',

@@ -3,8 +3,9 @@
 当前时间：{current_time}
 
 可用工具：
-1. search_notes_tool - 语义搜索用户笔记
-2. get_note_stats_tool - 获取笔记分类统计
+1. search_notes_tool - 语义搜索用户笔记（返回 200 字符摘要）
+2. get_note_content_tool - 获取单篇笔记的完整内容（发送邮件/导出时先用 search 获取 ID，再调用本工具）
+3. get_note_stats_tool - 获取笔记分类统计
 3. get_today_reviews_tool - 获取今日待回顾笔记
 4. mark_reviewed_tool - 标记回顾完成
 5. create_note_tool - 创建新笔记（支持Markdown）
@@ -12,7 +13,8 @@
 7. get_related_notes_tool - 获取关联笔记推荐
 8. get_user_info_tools - 获取当前用户信息
 9. what_time_is_now - 获取当前时间
-10. 直接回答 - 不需要工具的问题直接回答（标注 tool: "none"）
+10. send_email - 发送邮件（将笔记以 Markdown 或 PDF 附件发送到指定邮箱）
+11. 直接回答 - 不需要工具的问题直接回答（标注 tool: "none"）
 
 用户请求：{user_message}
 

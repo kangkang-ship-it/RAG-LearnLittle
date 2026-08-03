@@ -23,6 +23,7 @@ ENDPOINT_RATE_LIMITS = {
     "/api/v1/chat": 10,              # Agent 对话（Ollama 正常）
     "/api/v1/knowledge/upload": 20,  # 知识库上传
     "/api/v1/note": 60,              # 笔记 CRUD
+    "/api/v1/auth/send-code": 10,    # 邮箱验证码发送（更长前缀优先匹配，覆盖 /api/v1/auth: 5）
     "/api/v1/auth": 5,               # 登录/注册（防暴力破解）
 }
 

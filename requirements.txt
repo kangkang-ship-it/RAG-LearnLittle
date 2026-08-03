@@ -38,6 +38,12 @@ python-magic-bin>=0.4.14; sys_platform == "win32"
 # ========== Token Counting ==========
 tiktoken>=0.7.0
 
+# ========== Email ==========
+aiosmtplib>=3.0.0
+
+# ========== Scheduler ==========
+apscheduler>=3.10.0
+
 # ========== Utilities ==========
 python-dotenv>=1.1.0
 pyyaml>=6.0.2

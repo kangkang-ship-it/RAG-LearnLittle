@@ -8,7 +8,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Text, DateTime, Integer, func
+from sqlalchemy import String, Text, DateTime, Integer, Boolean, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -42,7 +42,10 @@ class User(Base):
     
     # 邮箱（唯一，可选）
     email: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
-    
+
+    # 邮箱是否已验证（注册/修改邮箱验证通过后为 True）
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     # 密码哈希（bcrypt）
     password: Mapped[str] = mapped_column(String(255), nullable=False)
     

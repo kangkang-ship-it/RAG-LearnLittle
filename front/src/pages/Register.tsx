@@ -12,24 +12,63 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { User, Mail, Lock } from 'lucide-react';
+import { User, Mail, Lock, ShieldCheck } from 'lucide-react';
 import { authApi } from '../api/auth';
 import { GeometricBackground, IllustrationScene } from '../components/common/IllustrationScene';
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function Register() {
   const navigate = useNavigate();
 
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
+  const [verificationCode, setVerificationCode] = useState('');
+  const [countdown, setCountdown] = useState(0);
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
+
+  /** 发送邮箱验证码（60s 倒计时防重复点击） */
+  const handleSendCode = async () => {
+    if (!EMAIL_RE.test(email)) {
+      toast.error('请输入正确的邮箱地址');
+      return;
+    }
+    if (countdown > 0) return;
+
+    try {
+      await authApi.sendVerificationCode(email);
+      toast.success('验证码已发送，请查收邮件');
+      setCountdown(60);
+      const timer = setInterval(() => {
+        setCountdown((prev) => {
+          if (prev <= 1) {
+            clearInterval(timer);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    } catch (err: unknown) {
+      const error = err as { response?: { data?: { message?: string } } };
+      toast.error(error.response?.data?.message || '验证码发送失败');
+    }
+  };
 
   /** 提交注册 */
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
 
     // 前端校验
+    if (!EMAIL_RE.test(email)) {
+      toast.error('请输入正确的邮箱地址');
+      return;
+    }
+    if (verificationCode.length !== 6) {
+      toast.error('请输入 6 位邮箱验证码');
+      return;
+    }
     if (password.length < 8) {
       toast.error('密码至少 8 位');
       return;
@@ -48,7 +87,8 @@ export default function Register() {
       await authApi.register({
         username,
         password,
-        email: email || undefined,
+        email,
+        verification_code: verificationCode,
       });
 
       toast.success('注册成功，请登录');
@@ -91,8 +131,8 @@ export default function Register() {
             boxShadow: '0 12px 48px rgba(22,119,255,0.1), 0 4px 12px rgba(0,0,0,0.04)',
           }}>
 
-            {/* 主标题 - 云上笔记 */}
-            <h2 className="text-center font-semibold mb-4" style={{ fontSize: 28, color: '#1a2a4a' }}>云上笔记</h2>
+            {/* 主标题 - 云尚笔记 */}
+            <h2 className="text-center font-semibold mb-4" style={{ fontSize: 28, color: '#1a2a4a' }}>云尚</h2>
 
             {/* 次级标题行 - 创建账号 */}
             <div className="flex items-center justify-between mb-8">
@@ -123,20 +163,54 @@ export default function Register() {
                 />
               </div>
 
-              {/* 邮箱 */}
+              {/* 邮箱 + 发送验证码 */}
               <div className="relative">
                 <Mail size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#1677ff]" />
+                <div className="flex gap-2">
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="请输入邮箱"
+                    className="w-full pl-10 pr-4 py-2.5 text-sm text-gray-800
+                      placeholder:text-gray-400 outline-none transition-all duration-200
+                      hover:border-[#c8d0da]
+                      focus:border-[#1677ff] focus:shadow-[0_0_0_3px_rgba(22,119,255,0.08)]
+                      active:scale-[0.99]"
+                    style={{ borderRadius: 12, border: '1px solid #e0e4ea' }}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSendCode}
+                    disabled={countdown > 0}
+                    className="shrink-0 px-4 py-2.5 text-sm font-medium text-white
+                      bg-[#1677ff] hover:bg-[#0d5bd6] active:bg-[#0a4db8]
+                      disabled:opacity-50 transition-all duration-200"
+                    style={{ borderRadius: 12 }}
+                  >
+                    {countdown > 0 ? `${countdown}s` : '发送验证码'}
+                  </button>
+                </div>
+              </div>
+
+              {/* 验证码 */}
+              <div className="relative">
+                <ShieldCheck size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#1677ff]" />
                 <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="请输入邮箱（选填）"
+                  type="text"
+                  value={verificationCode}
+                  onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  placeholder="请输入 6 位数字验证码"
                   className="w-full pl-10 pr-4 py-2.5 text-sm text-gray-800
                     placeholder:text-gray-400 outline-none transition-all duration-200
                     hover:border-[#c8d0da]
                     focus:border-[#1677ff] focus:shadow-[0_0_0_3px_rgba(22,119,255,0.08)]
                     active:scale-[0.99]"
                   style={{ borderRadius: 12, border: '1px solid #e0e4ea' }}
+                  inputMode="numeric"
+                  maxLength={6}
+                  required
                 />
               </div>
 

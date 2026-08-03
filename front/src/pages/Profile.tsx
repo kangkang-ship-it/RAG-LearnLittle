@@ -10,11 +10,14 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { Camera, Save, User } from 'lucide-react';
+import { Camera, Mail, Save, User } from 'lucide-react';
 import { userApi } from '../api/user';
+import { authApi } from '../api/auth';
 import { useUserStore } from '../stores/useUserStore';
 import LoadingSkeleton from '../components/common/LoadingSkeleton';
 import type { UserInfo } from '../types/api';
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function Profile() {
   const { t } = useTranslation();
@@ -26,6 +29,12 @@ export default function Profile() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [email, setEmail] = useState('');
+  const [emailVerified, setEmailVerified] = useState(false);
+  const [editingEmail, setEditingEmail] = useState(false);
+  const [newEmail, setNewEmail] = useState('');
+  const [emailCode, setEmailCode] = useState('');
+  const [emailCountdown, setEmailCountdown] = useState(0);
+  const [changingEmail, setChangingEmail] = useState(false);
   const [bio, setBio] = useState('');
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
@@ -39,6 +48,7 @@ export default function Profile() {
         const user: UserInfo = res.data.data;
         updateUserInfo(user);
         setEmail(user.email || '');
+        setEmailVerified(user.email_verified);
         setBio(user.bio || '');
         setAvatarUrl(user.avatar);
       } catch {
@@ -76,17 +86,73 @@ export default function Profile() {
     }
   };
 
-  /** 保存资料修改 */
+  /** 保存资料修改（邮箱已独立为验证模块，此处只保存简介） */
   const handleSave = async () => {
     setSaving(true);
     try {
-      await userApi.updateMe({ email, bio });
-      updateUserInfo({ email, bio });
+      await userApi.updateMe({ bio });
+      updateUserInfo({ bio });
       toast.success('保存成功');
     } catch {
       toast.error(t('common.error'));
     } finally {
       setSaving(false);
+    }
+  };
+
+  /** 修改邮箱流程 ①：发送验证码到新邮箱 */
+  const handleSendEmailCode = async () => {
+    if (!EMAIL_RE.test(newEmail)) {
+      toast.error('请输入正确的邮箱地址');
+      return;
+    }
+    if (emailCountdown > 0) return;
+
+    try {
+      await authApi.sendVerificationCode(newEmail);
+      toast.success('验证码已发送，请查收邮件');
+      setEmailCountdown(60);
+      const timer = setInterval(() => {
+        setEmailCountdown((prev) => {
+          if (prev <= 1) {
+            clearInterval(timer);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    } catch (err: unknown) {
+      const error = err as { response?: { data?: { message?: string } } };
+      toast.error(error.response?.data?.message || '验证码发送失败');
+    }
+  };
+
+  /** 修改邮箱流程 ②：提交新邮箱 + 验证码 */
+  const handleConfirmEmailChange = async () => {
+    if (!EMAIL_RE.test(newEmail)) {
+      toast.error('请输入正确的邮箱地址');
+      return;
+    }
+    if (emailCode.length !== 6) {
+      toast.error('请输入 6 位验证码');
+      return;
+    }
+
+    setChangingEmail(true);
+    try {
+      await userApi.changeEmail({ email: newEmail, verification_code: emailCode });
+      setEmail(newEmail);
+      setEmailVerified(true);
+      updateUserInfo({ email: newEmail, email_verified: true });
+      setEmailCode('');
+      setNewEmail('');
+      setEditingEmail(false);
+      toast.success('邮箱修改成功');
+    } catch (err: unknown) {
+      const error = err as { response?: { data?: { message?: string } } };
+      toast.error(error.response?.data?.message || '邮箱修改失败');
+    } finally {
+      setChangingEmail(false);
     }
   };
 
@@ -151,18 +217,70 @@ export default function Profile() {
 
       {/* 资料编辑表单 */}
       <div className="space-y-4">
-        {/* 邮箱 */}
+        {/* 邮箱（独立验证模块：展示状态 + 修改邮箱需验证码） */}
         <div>
           <label className="block text-sm text-[var(--color-text-secondary)] mb-1">
             {t('auth.email')}
           </label>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="your@email.com"
-            className="w-full px-3 py-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]"
-          />
+          <div className="flex items-center gap-2 flex-wrap">
+            <Mail size={15} className="text-[var(--color-text-tertiary)]" />
+            <span className="text-sm text-[var(--color-text)]">{email || '未绑定邮箱'}</span>
+            {emailVerified ? (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400">
+                ✓ 已验证
+              </span>
+            ) : (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
+                未验证
+              </span>
+            )}
+            <button
+              onClick={() => setEditingEmail(!editingEmail)}
+              className="text-xs text-[var(--color-accent)] hover:underline"
+            >
+              {editingEmail ? '取消' : '修改邮箱'}
+            </button>
+          </div>
+
+          {/* 修改邮箱验证流程（两步：发送验证码 → 提交新邮箱+验证码） */}
+          {editingEmail && (
+            <div className="mt-3 space-y-2 p-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-bg)]">
+              <div className="flex gap-2">
+                <input
+                  type="email"
+                  value={newEmail}
+                  onChange={(e) => setNewEmail(e.target.value)}
+                  placeholder="输入新邮箱"
+                  className="flex-1 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-card)] text-[var(--color-text)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]"
+                />
+                <button
+                  onClick={handleSendEmailCode}
+                  disabled={emailCountdown > 0}
+                  className="shrink-0 px-3 py-2 text-xs text-white bg-[var(--color-accent)] rounded-[var(--radius-md)] hover:opacity-90 disabled:opacity-50"
+                >
+                  {emailCountdown > 0 ? `${emailCountdown}s` : '发送验证码'}
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={emailCode}
+                  onChange={(e) => setEmailCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  placeholder="输入 6 位验证码"
+                  inputMode="numeric"
+                  maxLength={6}
+                  className="flex-1 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-card)] text-[var(--color-text)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]"
+                />
+                <button
+                  onClick={handleConfirmEmailChange}
+                  disabled={changingEmail}
+                  className="shrink-0 px-3 py-2 text-xs text-white bg-[var(--color-accent)] rounded-[var(--radius-md)] hover:opacity-90 disabled:opacity-50"
+                >
+                  {changingEmail ? '提交中...' : '确认修改'}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* 个人简介 */}

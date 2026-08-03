@@ -265,8 +265,8 @@ export default function Login() {
             boxShadow: '0 12px 48px rgba(22,119,255,0.1), 0 4px 12px rgba(0,0,0,0.04)',
           }}>
 
-            {/* 主标题 - 云上笔记 */}
-            <h2 className="text-center font-semibold mb-4" style={{ fontSize: 28, color: '#1a2a4a' }}>云上笔记</h2>
+            {/* 主标题 - 云尚笔记 */}
+            <h2 className="text-center font-semibold mb-4" style={{ fontSize: 28, color: '#1a2a4a' }}>云尚</h2>
 
             {/* 次级标题行 - 账号登录 */}
             <div className="flex items-center justify-between mb-8">

@@ -17,6 +17,8 @@ export const endpoints = {
     logout: `${API_PREFIX}/auth/logout`,
     refresh: `${API_PREFIX}/auth/refresh`,
     sseToken: `${API_PREFIX}/auth/sse-token`,
+    /** POST 发送邮箱验证码（注册 / 修改邮箱复用） */
+    sendCode: `${API_PREFIX}/auth/send-code`,
     /** GET 获取活跃设备会话列表 */
     sessions: `${API_PREFIX}/auth/sessions`,
     /** DELETE 撤销指定设备会话 */
@@ -28,6 +30,8 @@ export const endpoints = {
     me: `${API_PREFIX}/user/me`,
     password: `${API_PREFIX}/user/me/password`,
     avatar: `${API_PREFIX}/file/avatar`,
+    /** POST 修改/绑定邮箱（两步流程第二步） */
+    changeEmail: `${API_PREFIX}/user/change-email`,
   },
 
   // ========== 笔记 ==========
@@ -40,6 +44,12 @@ export const endpoints = {
     batch: `${API_PREFIX}/note/batch`,
     autocomplete: `${API_PREFIX}/note/autocomplete`,
     writeAssistant: `${API_PREFIX}/note/write-assistant`,
+    /** GET 回收站列表 */
+    recycleBin: `${API_PREFIX}/note/recycle-bin`,
+    /** POST 恢复笔记 */
+    restore: (id: string) => `${API_PREFIX}/note/${id}/restore`,
+    /** DELETE 彻底删除笔记 */
+    permanent: (id: string) => `${API_PREFIX}/note/${id}/permanent`,
   },
 
   // ========== 聊天 ==========

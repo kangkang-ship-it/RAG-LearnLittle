@@ -235,6 +235,181 @@ class NoteService:
 
         logger.info(f"笔记软删除: note_id={note_id}")
 
+    # ========== 回收站 ==========
+
+    async def list_deleted_notes(
+        self, db: AsyncSession, user_id: str, page: int = 1, page_size: int = 20
+    ) -> Tuple[List[Note], int]:
+        """
+        分页获取回收站笔记列表（deleted_at IS NOT NULL，按删除时间倒序）
+
+        Args:
+            db: 数据库会话
+            user_id: 用户 ID
+            page: 页码
+            page_size: 每页数量
+
+        Returns:
+            (回收站笔记列表, 总数)
+        """
+        query = select(Note).where(
+            and_(Note.user_id == user_id, Note.deleted_at.isnot(None))
+        ).order_by(Note.deleted_at.desc())
+        count_query = select(func.count()).select_from(Note).where(
+            and_(Note.user_id == user_id, Note.deleted_at.isnot(None))
+        )
+
+        query = query.offset((page - 1) * page_size).limit(page_size)
+
+        result = await db.execute(query)
+        total_result = await db.execute(count_query)
+
+        notes = list(result.scalars().all())
+        total = total_result.scalar()
+
+        return notes, total
+
+    async def restore_note(self, db: AsyncSession, note_id: str, user_id: str) -> Note:
+        """
+        从回收站恢复笔记（清除 deleted_at + 重建 ChromaDB 向量）
+
+        流程：
+        1. 查询笔记（验证 user_id 归属 + deleted_at IS NOT NULL）
+        2. UPDATE deleted_at = NULL
+        3. 重建 ChromaDB 向量 —— 写入格式必须与 _sync_to_vector 完全一致
+           （ids=f"note_{note.id}"、metadata 含 user_id/note_id/title/category），
+           否则 delete_note_vectors / search_notes 无法正确定位
+        4. 若向量重建失败：记录 error 日志，不阻塞恢复（向量可由后续任务补建）
+
+        Args:
+            db: 数据库会话
+            note_id: 笔记 ID
+            user_id: 用户 ID
+
+        Returns:
+            恢复后的笔记对象
+
+        Raises:
+            BusinessError: 笔记不存在、无权访问或不在回收站中
+        """
+        # 1. 查询笔记（验证归属 + 确保在回收站中）
+        result = await db.execute(
+            select(Note).where(
+                and_(Note.id == note_id, Note.user_id == user_id, Note.deleted_at.isnot(None))
+            )
+        )
+        note = result.scalar_one_or_none()
+        if not note:
+            raise BusinessError(code=ErrorCode.NOTE_NOT_FOUND, http_status=404)
+
+        # 2. 清除 deleted_at
+        note.deleted_at = None
+        note.updated_at = func.now()
+        await db.flush()
+
+        # 3. 重建 ChromaDB 向量（与 _sync_to_vector 完全一致）
+        if self.vector_store:
+            try:
+                await self.vector_store.upsert_document(
+                    documents=[note.content or note.title],
+                    metadatas=[{
+                        "user_id": note.user_id,
+                        "note_id": note.id,
+                        "title": note.title,
+                        "category": note.category or "",
+                    }],
+                    ids=[f"note_{note.id}"],
+                    collection="notes",
+                )
+                logger.info(f"回收站笔记恢复，向量重建完成: note_id={note.id}")
+            except Exception as e:
+                # 向量重建失败不阻塞恢复（笔记已恢复，向量可由定时修复任务补建）
+                logger.error(f"恢复笔记向量重建失败: note_id={note.id}, error={e}")
+
+        logger.info(f"笔记恢复: note_id={note_id}")
+        return note
+
+    async def permanent_delete(self, db: AsyncSession, note_id: str, user_id: str) -> None:
+        """
+        彻底删除笔记（物理删除 MySQL 记录 + 删除 ChromaDB 向量）
+
+        ⚠️ 级联影响：Note.review_records 关系定义了 cascade="all, delete-orphan"
+        （app/models/note.py），物理删除 Note 时 SQLAlchemy 会级联删除该笔记的
+        所有 ReviewRecord（回顾记录），且不可恢复。前端确认弹窗需明确提示。
+
+        Args:
+            db: 数据库会话
+            note_id: 笔记 ID
+            user_id: 用户 ID
+
+        Raises:
+            BusinessError: 笔记不存在、无权访问或不在回收站中
+        """
+        # 1. 验证笔记属于当前用户 且已删除（回收站内）
+        result = await db.execute(
+            select(Note).where(
+                and_(Note.id == note_id, Note.user_id == user_id, Note.deleted_at.isnot(None))
+            )
+        )
+        note = result.scalar_one_or_none()
+        if not note:
+            raise BusinessError(code=ErrorCode.NOTE_NOT_FOUND, http_status=404)
+
+        # 2. 删除 ChromaDB 向量（若存在）
+        if self.vector_store:
+            try:
+                await self.vector_store.delete_note_vectors(note_id)
+            except Exception as e:
+                logger.error(f"彻底删除时向量删除失败: note_id={note_id}, error={e}")
+
+        # 3. 物理删除（ORM 级联删除 review_records）
+        await db.delete(note)
+        await db.flush()
+
+        logger.info(f"笔记彻底删除: note_id={note_id}")
+
+    async def cleanup_expired_notes(self, db: AsyncSession, days: int = 14) -> int:
+        """
+        清理过期笔记（deleted_at 超过 days 天）→ 返回删除数量
+
+        定时任务调用；同时清理 ChromaDB 向量，并级联删除 review_records。
+
+        Args:
+            db: 数据库会话
+            days: 过期阈值天数（默认 14 天）
+
+        Returns:
+            本次物理删除的笔记数量
+        """
+        from datetime import datetime, timedelta
+
+        cutoff = datetime.now() - timedelta(days=days)
+
+        result = await db.execute(
+            select(Note).where(
+                and_(Note.deleted_at.isnot(None), Note.deleted_at < cutoff)
+            )
+        )
+        expired = list(result.scalars().all())
+        if not expired:
+            return 0
+
+        # 删除 ChromaDB 向量
+        if self.vector_store:
+            for note in expired:
+                try:
+                    await self.vector_store.delete_note_vectors(note.id)
+                except Exception as e:
+                    logger.warning(f"清理过期向量失败: note_id={note.id}, error={e}")
+
+        # 物理删除（ORM 级联删除 review_records）
+        for note in expired:
+            await db.delete(note)
+        await db.flush()
+
+        logger.info(f"清理过期笔记完成: 删除 {len(expired)} 条（超过 {days} 天）")
+        return len(expired)
+
     async def pin_note(self, db: AsyncSession, note_id: str, user_id: str) -> Note:
         """
         置顶笔记

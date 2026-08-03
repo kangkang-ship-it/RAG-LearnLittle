@@ -8,7 +8,7 @@ import client from './client';
 import { endpoints } from './endpoints';
 import type {
   ApiResponse, Note, NoteCreate, NoteUpdate, NoteListResponse,
-  NoteSearchRequest, NoteSearchResult, BatchOperation,
+  NoteSearchRequest, NoteSearchResult, BatchOperation, DeletedNoteListResponse,
 } from '../types/api';
 
 export const notesApi = {
@@ -28,9 +28,21 @@ export const notesApi = {
   update: (id: string, data: NoteUpdate) =>
     client.put<ApiResponse<Note>>(endpoints.note.detail(id), data),
 
-  /** 删除笔记（软删除） */
+  /** 删除笔记（软删除 → 移入回收站） */
   delete: (id: string) =>
     client.delete<ApiResponse<null>>(endpoints.note.detail(id)),
+
+  /** 回收站列表（分页） */
+  listDeleted: (params?: { page?: number; page_size?: number }) =>
+    client.get<ApiResponse<DeletedNoteListResponse>>(endpoints.note.recycleBin, { params }),
+
+  /** 恢复笔记（从回收站还原） */
+  restore: (id: string) =>
+    client.post<ApiResponse<null>>(endpoints.note.restore(id)),
+
+  /** 彻底删除笔记（不可恢复） */
+  permanentDelete: (id: string) =>
+    client.delete<ApiResponse<null>>(endpoints.note.permanent(id)),
 
   /** 语义搜索 */
   search: (data: NoteSearchRequest) =>

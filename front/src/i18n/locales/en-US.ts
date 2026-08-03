@@ -8,6 +8,7 @@ const en = {
   'nav.chat': 'AI Chat',
   'nav.sessions': 'Sessions',
   'nav.review': 'Daily Review',
+  'nav.recycle_bin': 'Recycle Bin',
   'nav.knowledge': 'Knowledge Base',
   'nav.profile': 'Profile',
   'nav.settings': 'Settings',

@@ -354,6 +354,7 @@ async def chat_query(
                     db_session_factory=async_session_factory,
                     note_service=note_service,
                     review_service=review_service,
+                    email_service=init_manager.email_service,
                     timeout=LLM_STREAM_TIMEOUT,
                 ):
                     event_type = event.get("type", "")
@@ -408,6 +409,7 @@ async def chat_query(
                         db_session_factory=async_session_factory,
                         note_service=note_service,
                         review_service=review_service,
+                        email_service=init_manager.email_service,
                         timeout=LLM_STREAM_TIMEOUT * 2,
                     ):
                         event_type = event.get("type", "")

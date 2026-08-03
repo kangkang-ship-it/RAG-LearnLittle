@@ -31,6 +31,7 @@ from app.models.user import User
 from app.schemas.auth import (
     UserRegister, UserLogin, TokenResponse,
     RefreshTokenRequest, UserUpdate, PasswordChange, UserInfo, SessionInfo,
+    SendCodeRequest, EmailChangeRequest,
 )
 from app.utils.auth_utils import (
     hash_password, verify_password, validate_password_strength,
@@ -48,36 +49,162 @@ from app.utils.file_handler import validate_avatar_file, get_safe_filename, ensu
 router = APIRouter()
 
 
+def _get_email_service():
+    """获取 EmailService 实例（优先复用 init_manager 中的单例，否则按环境变量新建）"""
+    try:
+        from main import init_manager
+        if init_manager.email_service:
+            return init_manager.email_service
+    except Exception:
+        pass
+    from app.services.email_service import EmailService
+    return EmailService()
+
+
 @router.post("/auth/register", summary="用户注册")
 async def register(data: UserRegister, db: AsyncSession = Depends(get_db)):
     """
     注册新用户
-    
-    校验用户名唯一性，密码强度，创建用户记录。
+
+    校验邮箱验证码、用户名唯一性、邮箱唯一性、密码强度，创建用户记录（email_verified=True）。
     """
+    # 校验邮箱验证码（一次性，校验通过即删除 Redis 记录）
+    email_service = _get_email_service()
+    if not await email_service.verify_code(data.email, data.verification_code):
+        raise BusinessError(code=ErrorCode.EMAIL_CODE_INVALID, http_status=400)
+
+    # 检查邮箱是否已被占用（users.email 有 UNIQUE 约束，此处提前返回友好提示）
+    result = await db.execute(select(User).where(User.email == data.email))
+    if result.scalar_one_or_none():
+        raise BusinessError(code=ErrorCode.EMAIL_EXISTS, http_status=409)
+
     # 检查用户名是否已存在
     result = await db.execute(select(User).where(User.username == data.username))
     if result.scalar_one_or_none():
         raise BusinessError(code=ErrorCode.USERNAME_EXISTS, http_status=409)
-    
+
     # 校验密码强度
     is_valid, error_msg = validate_password_strength(data.password)
     if not is_valid:
         raise BusinessError(code=ErrorCode.INVALID_PARAMETER, message=error_msg)
-    
+
     # 创建用户
     user = User(
         uuid=str(uuid.uuid4()),
         username=data.username,
         email=data.email,
+        email_verified=True,
         password=hash_password(data.password),
     )
     db.add(user)
     await db.flush()
-    
-    logger.info(f"用户注册成功: username={data.username}, id={user.uuid}")
-    
+
+    logger.info(f"用户注册成功: username={data.username}, id={user.uuid}, email_verified=True")
+
     return success_response(data={"user_id": user.uuid, "username": user.username})
+
+
+@router.post("/auth/send-code", summary="发送邮箱验证码", dependencies=[Depends(rate_limit(endpoint_limit=10))])
+async def send_code(data: SendCodeRequest, request: Request):
+    """
+    发送邮箱验证码（注册 / 修改邮箱复用）
+
+    限流策略：
+    - 同一邮箱 60 秒内仅可发送 1 次（Redis key: email_code_cooldown:{email}）
+    - 同一 IP 每小时最多 10 次（Redis key: send_code_ip:{ip}:{hour}，端点内手动实现）
+    - 分钟级限流由 rate_limit 装饰器兜底（/api/v1/auth/send-code: 10 次/分钟）
+    """
+    redis = get_redis()
+
+    # 1. 邮箱冷却检查（60s）
+    cooldown_key = f"email_code_cooldown:{data.email}"
+    if await redis.exists(cooldown_key):
+        ttl = await redis.ttl(cooldown_key)
+        raise BusinessError(
+            code=ErrorCode.ENDPOINT_RATE_LIMIT,
+            message=f"发送过于频繁，请 {ttl} 秒后再试",
+            http_status=429,
+        )
+
+    # 2. IP 小时级限流（10 次/小时）
+    client_ip = (
+        request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        or request.headers.get("X-Real-IP", "").strip()
+    )
+    if not client_ip:
+        client_ip = request.client.host if request.client else None
+    if not client_ip:
+        # 无法获取 IP → 跳过 IP 限流，仅依赖邮箱维度限流
+        logger.warning("send-code: 无法获取客户端 IP，跳过 IP 限流")
+    else:
+        hour_bucket = datetime.now().strftime("%Y%m%d%H")
+        ip_key = f"send_code_ip:{client_ip}:{hour_bucket}"
+        ip_count = await redis.incr(ip_key)
+        if ip_count == 1:
+            await redis.expire(ip_key, 3600)
+        if ip_count > 10:
+            raise BusinessError(
+                code=ErrorCode.ENDPOINT_RATE_LIMIT,
+                message="请求过于频繁，请稍后再试",
+                http_status=429,
+            )
+
+    # 3. 生成验证码 + 发送邮件（失败返回友好提示，不让用户看到 SMTP 异常堆栈）
+    email_service = _get_email_service()
+    if not email_service.available:
+        logger.error("send-code: SMTP 未配置，无法发送邮件")
+        raise BusinessError(code=ErrorCode.EMAIL_SEND_FAILED, http_status=503)
+
+    try:
+        await email_service.send_verification_code(data.email)
+    except Exception as e:
+        logger.error(f"send-code: 邮件发送失败 email={data.email}, error={e}")
+        raise BusinessError(code=ErrorCode.EMAIL_SEND_FAILED, http_status=502)
+
+    # 4. 设置发送冷却（60s）
+    await redis.set(cooldown_key, "1", ex=60)
+
+    logger.info(f"验证码已发送: email={data.email}")
+    return success_response(message="验证码已发送")
+
+
+@router.post("/user/change-email", summary="修改/绑定邮箱")
+async def change_email(
+    data: EmailChangeRequest,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    修改/绑定邮箱（两步流程第二步）
+
+    流程：
+    1. 校验验证码（复用 EmailService.verify_code，一次性）
+    2. 检查新邮箱是否已被其他用户占用
+    3. 更新 user.email + email_verified=True
+    """
+    # 1. 校验验证码
+    email_service = _get_email_service()
+    if not await email_service.verify_code(data.email, data.verification_code):
+        raise BusinessError(code=ErrorCode.EMAIL_CODE_INVALID, http_status=400)
+
+    # 2. 检查新邮箱是否被其他用户占用（排除自己）
+    result = await db.execute(select(User).where(User.email == data.email))
+    existing = result.scalar_one_or_none()
+    if existing and existing.uuid != user_id:
+        raise BusinessError(code=ErrorCode.EMAIL_EXISTS, http_status=409)
+
+    # 3. 更新邮箱
+    result = await db.execute(select(User).where(User.uuid == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise BusinessError(code=ErrorCode.USER_NOT_FOUND, http_status=404)
+
+    user.email = data.email
+    user.email_verified = True
+    await db.flush()
+
+    logger.info(f"邮箱修改成功: user_id={user_id}, new_email={data.email}")
+    return success_response(message="邮箱修改成功")
 
 
 @router.post("/auth/login", summary="用户登录", dependencies=[Depends(rate_limit(endpoint_limit=5))])
@@ -343,20 +470,34 @@ async def get_user_info(
 @router.put("/user/me", summary="更新用户信息")
 async def update_user_info(
     data: UserUpdate,
+    request: Request,
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
     """更新当前用户的个人资料"""
+    # 兜底校验：邮箱变更必须走 POST /user/change-email 验证流程
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if "email" in body:
+            raise BusinessError(
+                code=ErrorCode.INVALID_PARAMETER,
+                message="邮箱修改需通过验证码验证，请使用'修改邮箱'功能",
+            )
+
     result = await db.execute(select(User).where(User.uuid == user_id))
     user = result.scalar_one_or_none()
-    
+
     if not user:
         raise BusinessError(code=ErrorCode.USER_NOT_FOUND, http_status=404)
-    
+
     update_data = data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(user, field, value)
-    
+
     await db.flush()
     return success_response(message="更新成功")
 

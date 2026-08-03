@@ -11,14 +11,16 @@
  * 3. 底部：退出登录
  */
 
+import { useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   FileText, MessageSquare, History, BookOpen, Library,
-  User, Settings, Info, LogOut, ChevronLeft, ChevronRight,
+  User, Settings, Info, LogOut, ChevronLeft, ChevronRight, Trash2,
 } from 'lucide-react';
 import { useUserStore } from '../../stores/useUserStore';
 import { authApi } from '../../api/auth';
+import { notesApi } from '../../api/notes';
 
 interface SidebarProps {
   collapsed: boolean;
@@ -31,6 +33,7 @@ const navItems = [
   { to: '/chat', icon: MessageSquare, labelKey: 'nav.chat' },
   { to: '/sessions', icon: History, labelKey: 'nav.sessions' },
   { to: '/review', icon: BookOpen, labelKey: 'nav.review' },
+  { to: '/recycle-bin', icon: Trash2, labelKey: 'nav.recycle_bin' },
   { to: '/knowledge', icon: Library, labelKey: 'nav.knowledge' },
 ];
 
@@ -45,6 +48,18 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const navigate = useNavigate();
   const logout = useUserStore((s) => s.logout);
 
+  /** 回收站角标：已删除笔记数量（通过列表接口 total 获取） */
+  const [trashCount, setTrashCount] = useState(0);
+
+  useEffect(() => {
+    notesApi
+      .listDeleted({ page_size: 1 })
+      .then((res) => setTrashCount(res.data.data?.total ?? 0))
+      .catch(() => {
+        // 加载失败不阻塞导航渲染
+      });
+  }, []);
+
   /** 处理登出 */
   const handleLogout = async () => {
     try {
@@ -58,9 +73,10 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
     navigate('/login');
   };
 
-  /** 渲染导航项 */
+  /** 渲染导航项（回收站项附带已删除数量角标） */
   const renderNavItem = (item: { to: string; icon: React.ElementType; labelKey: string }) => {
     const Icon = item.icon;
+    const showBadge = item.to === '/recycle-bin' && trashCount > 0;
     return (
       <NavLink
         key={item.to}
@@ -74,7 +90,14 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
         }
         title={collapsed ? t(item.labelKey) : undefined}
       >
-        <Icon size={20} />
+        <div className="relative">
+          <Icon size={20} />
+          {showBadge && (
+            <span className="absolute -top-1.5 -right-2 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] leading-4 text-center">
+              {trashCount > 99 ? '99+' : trashCount}
+            </span>
+          )}
+        </div>
         {!collapsed && <span className="text-sm font-medium">{t(item.labelKey)}</span>}
       </NavLink>
     );
@@ -95,7 +118,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
       <div className={`flex items-center p-4 border-b border-[var(--color-border)] ${collapsed ? 'justify-center' : 'justify-between'}`}>
         {!collapsed && (
           <h1 className="font-heading text-2xl font-bold text-[var(--color-text)]">
-            云上笔记
+            云尚
           </h1>
         )}
         <button
