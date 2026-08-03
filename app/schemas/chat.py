@@ -15,6 +15,7 @@ class QueryRequest(BaseModel):
     session_id: Optional[str] = Field(None, description="会话 ID（为空则创建新会话）")
     message: str = Field(..., min_length=1, max_length=10000, description="用户消息")
     idempotency_key: Optional[str] = Field(None, description="幂等键（防重复提交）")
+    enable_thinking: bool = Field(False, description="是否开启深度思考（思考模式，质量更高但响应更慢）")
 
 
 class RAGRequest(BaseModel):

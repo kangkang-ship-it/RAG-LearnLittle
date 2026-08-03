@@ -19,7 +19,7 @@ from typing import AsyncGenerator, Dict, Any, List, Optional
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from app.core.logger_handler import logger
-from app.utils.config import get_plan_execute_config, get_agent_config
+from app.utils.config import get_plan_execute_config, get_tool_groups_config
 
 
 # ============================================================
@@ -169,8 +169,9 @@ def _resolve_step_tool_groups(step: PlanStep) -> Optional[List[str]]:
     if not step.tool or step.tool == "none":
         return None
 
-    agent_config = get_agent_config()
-    tool_groups_config = agent_config.get("tool_groups", {})
+    # 注意：tool_groups 定义在 agent.yaml 顶层（get_tool_groups_config），
+    # 不能使用 get_agent_config()（只返回 "agent:" 段），否则映射永远为空。
+    tool_groups_config = get_tool_groups_config()
 
     # 构建反向映射：工具名 → 组名
     tool_to_group = {}
@@ -181,11 +182,11 @@ def _resolve_step_tool_groups(step: PlanStep) -> Optional[List[str]]:
     # 查找 step.tool 所属的组
     matched_groups = ["base"]  # 始终包含基础组
     group = tool_to_group.get(step.tool)
-    if group and group not in matched_groups:
+    if group is None:
+        logger.warning(f"步骤 {step.step} 工具 '{step.tool}' 未匹配到任何工具组，使用默认组")
+    elif group != "base" and group not in matched_groups:
         matched_groups.append(group)
         logger.debug(f"步骤 {step.step} 工具路由: tool='{step.tool}' → 工具组 {matched_groups}")
-    else:
-        logger.warning(f"步骤 {step.step} 工具 '{step.tool}' 未匹配到任何工具组，使用默认组")
 
     return matched_groups
 

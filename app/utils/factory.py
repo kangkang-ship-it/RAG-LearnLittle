@@ -73,6 +73,23 @@ class ModelProvider(str, Enum):
     OLLAMA = "ollama"         # Ollama（本地）
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    """
+    读取布尔型环境变量（true/1/yes → True，其余为 default）
+
+    Args:
+        name: 环境变量名
+        default: 未设置时的默认值
+
+    Returns:
+        布尔值
+    """
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return val.strip().lower() in ("true", "1", "yes")
+
+
 def get_provider() -> ModelProvider:
     """
     获取当前配置的模型提供商
@@ -95,22 +112,27 @@ def get_provider() -> ModelProvider:
 # 公开工厂函数
 # ============================================================
 
-def create_chat_model():
+def create_chat_model(enable_thinking: bool = False):
     """
     创建 Chat 模型实例
 
     根据 MODEL_PROVIDER 环境变量自动选择对应的 Chat 模型。
-    - dashscope → ChatTongyi（阿里云百炼）
+    - dashscope → ChatOpenAI（阿里云百炼兼容端点）
     - ollama    → ChatOllama（本地）
+
+    Args:
+        enable_thinking: 是否开启思考模式（qwen3 系列支持，DashScope 生效）。
+            True 时回答质量更高但延迟大幅增加（长任务可能超时）；
+            False 时响应更快。默认关闭，由前端"深度思考"开关控制。
 
     Returns:
         LangChain ChatModel 实例
     """
     provider = get_provider()
-    logger.info(f"创建 Chat 模型 (provider={provider.value})")
+    logger.info(f"创建 Chat 模型 (provider={provider.value}, enable_thinking={enable_thinking})")
 
     if provider == ModelProvider.DASHSCOPE:
-        return _create_dashscope_chat_model()
+        return _create_dashscope_chat_model(enable_thinking=enable_thinking)
     return _create_ollama_chat_model()
 
 
@@ -165,7 +187,10 @@ def create_classifier_model():
             base_url=DASHSCOPE_BASE_URL,
             streaming=False,  # 分类器不需要流式
             http_async_client=get_shared_async_client(),
-            request_timeout=10.0,
+            request_timeout=30.0,
+            # 思考模式由环境变量 CLASSIFIER_ENABLE_THINKING 控制，默认关闭：
+            # qwen3-flash 开启思考会拖到 30s+ 导致 L2 分类超时降级
+            extra_body={"enable_thinking": _env_bool("CLASSIFIER_ENABLE_THINKING", False)},
         )
     else:
         # Ollama
@@ -207,7 +232,11 @@ def create_plan_model():
             base_url=DASHSCOPE_BASE_URL,
             streaming=False,
             http_async_client=get_shared_async_client(),
-            request_timeout=15.0,
+            request_timeout=30.0,
+            # 思考模式由环境变量 PLAN_ENABLE_THINKING 控制，默认关闭：
+            # qwen3-flash 开启思考在规划任务上耗时 30s+（实测 46.7s 超时），
+            # 会耗尽 plan_timeout 预算；关闭后实测 2.4s 返回完整 JSON 计划。
+            extra_body={"enable_thinking": _env_bool("PLAN_ENABLE_THINKING", False)},
         )
     else:
         model_name = os.getenv("PLAN_MODEL", "qwen3:0.6b")
@@ -230,7 +259,7 @@ def create_plan_model():
 DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 
-def _create_dashscope_chat_model():
+def _create_dashscope_chat_model(enable_thinking: bool = False):
     """
     创建 DashScope Chat 模型（阿里云百炼）
 
@@ -240,6 +269,9 @@ def _create_dashscope_chat_model():
     环境变量：
     - DASHSCOPE_API_KEY: API 密钥（必需）
     - DASHSCOPE_CHAT_MODEL: 模型名称（默认 qwen3-max）
+
+    Args:
+        enable_thinking: 是否开启思考模式（前端"深度思考"开关）
 
     Returns:
         ChatOpenAI 实例（指向 DashScope 兼容端点）
@@ -252,7 +284,7 @@ def _create_dashscope_chat_model():
     if not api_key:
         raise ValueError("DASHSCOPE_API_KEY 未配置，请在 .env 中设置")
 
-    logger.info(f"DashScope Chat 模型: {model_name} @ {DASHSCOPE_BASE_URL}")
+    logger.info(f"DashScope Chat 模型: {model_name} @ {DASHSCOPE_BASE_URL} (enable_thinking={enable_thinking})")
 
     return ChatOpenAI(
         model=model_name,
@@ -261,6 +293,8 @@ def _create_dashscope_chat_model():
         streaming=True,
         http_async_client=get_shared_async_client(),  # 复用连接池
         request_timeout=120.0,                         # 超时保护
+        # 思考模式：由调用方（前端"深度思考"开关）决定
+        extra_body={"enable_thinking": enable_thinking},
     )
 
 

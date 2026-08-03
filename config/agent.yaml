@@ -93,9 +93,13 @@ tool_groups:
 # 工具路由规则（关键词 → 工具组映射）
 tool_routing:
   # 默认加载的工具组（未命中任何关键词时使用）
+  # 全量加载：让 LLM 自己决定使用哪个工具，关键词规则仅作为加速补充，
+  # 避免关键词穷举不完整导致"想用工具却没有"的问题。
   default_groups:
     - base
     - note_read
+    - note_write
+    - review
   # 关键词 → 工具组映射（命中后追加对应组）
   keyword_rules:
     note_write:

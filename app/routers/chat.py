@@ -90,8 +90,14 @@ async def chat_query(
                 yield f"data: {json.dumps({'type': 'error', 'content': 'AI 模型初始化超时，请稍后重试'})}\n\n"
             return StreamingResponse(timeout_stream(), media_type="text/event-stream")
     
-    chat_model = init_manager.chat_model
-    
+    # 根据前端"深度思考"开关选择模型实例
+    # 默认使用思考关闭的模型（响应更快）；开启时使用深度思考实例（质量更高）
+    if data.enable_thinking and getattr(init_manager, "chat_model_thinking", None):
+        chat_model = init_manager.chat_model_thinking
+        logger.debug(f"深度思考模式已开启: user={user_id[:8]}")
+    else:
+        chat_model = init_manager.chat_model
+
     if not chat_model:
         # 模型未初始化，返回错误 SSE
         async def error_stream():

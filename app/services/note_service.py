@@ -355,22 +355,28 @@ class NoteService:
     
     async def _sync_to_vector(self, note: Note) -> None:
         """
-        异步同步笔记到 ChromaDB 向量库
-        
-        失败时标记待修复，不影响主流程。
-        
+        异步同步笔记到 ChromaDB 向量库（notes_collection）
+
+        失败时记录日志，不影响主流程。
+        注意：ChromaDB 元数据仅支持标量值，tags 列表不入元数据；
+        检索端 search_notes 依赖 metadata 中的 user_id（隔离）和 note_id（关联）。
+
         Args:
             note: 笔记对象
         """
         try:
-            await self.vector_store.upsert_note(
-                note_id=note.id,
-                user_id=note.user_id,
-                title=note.title,
-                content=note.content,
-                tags=note.tags or [],
-                category=note.category or "",
+            await self.vector_store.upsert_document(
+                documents=[note.content or note.title],
+                metadatas=[{
+                    "user_id": note.user_id,
+                    "note_id": note.id,
+                    "title": note.title,
+                    "category": note.category or "",
+                }],
+                ids=[f"note_{note.id}"],
+                collection="notes",
             )
+            logger.debug(f"笔记向量同步完成: note_id={note.id}")
         except Exception as e:
             logger.error(f"向量同步失败: note_id={note.id}, error={e}")
     

@@ -53,7 +53,8 @@ class BackgroundInitManager:
         self.stage3_complete = asyncio.Event()  # 重排序模型就绪
         
         # 管理的实例
-        self.chat_model = None
+        self.chat_model = None          # 默认对话模型（思考模式关闭，更快）
+        self.chat_model_thinking = None # 深度思考模型（思考模式开启，前端开关控制）
         self.embed_model = None
         self.vision_model = None
         self.note_service = None
@@ -97,7 +98,14 @@ class BackgroundInitManager:
                 create_chat_model, create_embed_model,
                 create_classifier_model, create_plan_model,
             )
-            self.chat_model = create_chat_model()
+            self.chat_model = create_chat_model(enable_thinking=False)  # 默认关闭思考
+            try:
+                # 深度思考实例（供前端开关使用），失败不影响核心功能
+                self.chat_model_thinking = create_chat_model(enable_thinking=True)
+                logger.info("深度思考模型初始化成功")
+            except Exception as e:
+                logger.warning(f"深度思考模型初始化失败: {e}")
+                self.chat_model_thinking = None
             self.embed_model = create_embed_model()
             # 分类器和 Plan 模型（轻量级，失败不影响核心功能）
             try:

@@ -11,7 +11,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Send, Square, Plus, User, Bot, FileText, X, Search } from 'lucide-react';
+import { Send, Square, Plus, User, Bot, FileText, X, Search, Brain } from 'lucide-react';
 import { useSSE } from '../hooks/useSSE';
 import { useSessionStore } from '../stores/useSessionStore';
 import { useUserStore } from '../stores/useUserStore';
@@ -31,6 +31,8 @@ export default function AIChat() {
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [thinkingStages, setThinkingStages] = useState<{ stage: string; content: string }[]>([]);
+  // 深度思考开关（默认关闭；开启后请求带 enable_thinking=true，后端切换思考模型）
+  const [enableThinking, setEnableThinking] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -227,7 +229,7 @@ export default function AIChat() {
     try {
       await start(
         endpoints.chat.query,
-        { session_id: sessionId, message: messageText },
+        { session_id: sessionId, message: messageText, enable_thinking: enableThinking },
         {
           onThinking: (stage, content) => {
             setThinkingStages((prev) => [...prev, { stage, content }]);
@@ -427,6 +429,20 @@ export default function AIChat() {
 
       {/* 输入区 */}
       <div className="relative flex gap-2">
+        {/* 深度思考开关 */}
+        <button
+          onClick={() => setEnableThinking(!enableThinking)}
+          className={`flex-shrink-0 px-3 py-2.5 rounded-[var(--radius-md)] border transition-colors text-xs font-medium ${
+            enableThinking
+              ? 'border-[var(--color-accent)] text-[var(--color-accent)] bg-[var(--color-accent-bg)]'
+              : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-accent-bg)] hover:text-[var(--color-accent)]'
+          }`}
+          title="深度思考：回答质量更高但响应更慢"
+        >
+          <Brain size={16} className="inline-block mr-1 align-[-3px]" />
+          深度思考
+        </button>
+
         {/* 引用笔记按钮 */}
         <button
           onClick={toggleNotePicker}

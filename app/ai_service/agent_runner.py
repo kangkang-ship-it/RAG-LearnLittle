@@ -27,7 +27,8 @@ def resolve_tool_groups(user_message: str) -> List[str]:
 
     路由逻辑：
     1. 从 agent.yaml 加载 tool_routing 配置
-    2. 以 default_groups 为起点
+    2. 以 default_groups 为起点（当前配置为全量加载所有工具组，
+       让 LLM 自己决定使用哪个工具，关键词仅作为加速补充）
     3. 遍历 keyword_rules，命中关键词则追加对应工具组
     4. 去重后返回
 
@@ -42,7 +43,7 @@ def resolve_tool_groups(user_message: str) -> List[str]:
         # 未配置路由规则 → 返回 None 表示全量加载
         return None
 
-    default_groups = routing_config.get("default_groups", ["base", "note_read"])
+    default_groups = routing_config.get("default_groups", ["base", "note_read", "note_write", "review"])
     keyword_rules = routing_config.get("keyword_rules", {})
 
     # 以默认组为起点
@@ -60,14 +61,9 @@ def resolve_tool_groups(user_message: str) -> List[str]:
 
     logger.info(f"工具路由结果: groups={selected} (message='{user_message[:50]}...')")
 
-    # 兜底策略：当消息较长（>=15字符）但未命中任何写入/回顾关键词时，
-    # 默认加载 note_write 组，避免关键词匹配遗漏导致 Agent 无法创建笔记。
-    # 短消息（如“你好”“谢谢”）不触发兜底，保持轻量。
-    if len(user_message) >= 15:
-        if "note_write" not in selected:
-            selected.append("note_write")
-            logger.debug(f"工具路由兜底: 消息较长但未命中写入关键词，追加 note_write")
-
+    # 注：已移除原来的"消息>=15字符补 note_write"兜底。
+    # default_groups 现为全量加载（含 note_write/review），
+    # 不存在"关键词未命中导致工具缺失"的问题，无需兜底。
     return selected
 
 
