@@ -259,7 +259,7 @@ def create_agent_tools(
         "get_related_notes_tool": get_related_notes_tool,
     }
 
-    # 按需加载：根据 groups 过滤工具
+    # 按需加载：根据 groups 过滤工具   TODO: 未来可以增加工具组的动态注册机制，允许用户自定义工具组
     if groups is None:
         # 未指定 groups → 返回全部（向后兼容）
         return list(all_tools.values())
