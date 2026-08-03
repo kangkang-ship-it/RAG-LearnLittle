@@ -68,8 +68,8 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
         className={({ isActive }) =>
           `flex items-center gap-3 ${collapsed ? 'px-0' : 'px-4'} py-2.5 rounded-[var(--radius-md)] transition-all duration-200 ${
             isActive
-              ? 'bg-[#1677ff] text-white shadow-[0_2px_8px_rgba(22,119,255,0.3)]'
-              : 'text-[#5a6a8a] hover:bg-[#e8f0fe] hover:text-[#1677ff]'
+              ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)] shadow-[var(--shadow-accent-sm)]'
+              : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-accent-bg)] hover:text-[var(--color-accent)]'
           } ${collapsed ? 'justify-center' : ''}`
         }
         title={collapsed ? t(item.labelKey) : undefined}
@@ -82,11 +82,11 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   return (
     <aside
-      className={`flex flex-col h-full border-r border-[#d4dff0] transition-all duration-300 ${
+      className={`flex flex-col h-full border-r border-[var(--color-border)] transition-all duration-300 ${
         collapsed ? 'w-14' : 'w-60'
       }`}
       style={{
-        background: 'rgba(240, 245, 255, 0.85)',
+        background: 'var(--color-sidebar-bg)',
         backdropFilter: 'blur(12px)',
         WebkitBackdropFilter: 'blur(12px)',
       }}
@@ -94,7 +94,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
       {/* Logo 区域 */}
       <div className={`flex items-center p-4 border-b border-[var(--color-border)] ${collapsed ? 'justify-center' : 'justify-between'}`}>
         {!collapsed && (
-          <h1 className="font-heading text-2xl font-bold text-[#1a2a4a]">
+          <h1 className="font-heading text-2xl font-bold text-[var(--color-text)]">
             云上笔记
           </h1>
         )}
@@ -102,8 +102,8 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
           onClick={onToggle}
           className={`p-2 rounded-[var(--radius-sm)] transition-all duration-200 ${
             collapsed
-              ? 'bg-[#e8f0fe] text-[#1677ff] hover:bg-[#1677ff] hover:text-white'
-              : 'text-[#5a6a8a] hover:bg-[#e8f0fe] hover:text-[#1677ff]'
+              ? 'bg-[var(--color-accent-bg)] text-[var(--color-accent)] hover:bg-[var(--color-accent)] hover:text-[var(--color-on-accent)]'
+              : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-accent-bg)] hover:text-[var(--color-accent)]'
           }`}
           title={collapsed ? t('nav.expand') : t('nav.collapse')}
         >
@@ -125,7 +125,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
       <div className="p-3 border-t border-[var(--color-border)]">
         <button
           onClick={handleLogout}
-          className={`flex items-center gap-3 ${collapsed ? 'px-0' : 'px-4'} py-2.5 rounded-[var(--radius-md)] w-full text-[#1677ff] hover:bg-[#e8f0fe] transition-all duration-200 ${
+          className={`flex items-center gap-3 ${collapsed ? 'px-0' : 'px-4'} py-2.5 rounded-[var(--radius-md)] w-full text-[var(--color-accent)] hover:bg-[var(--color-accent-bg)] transition-all duration-200 ${
             collapsed ? 'justify-center' : ''
           }`}
           title={collapsed ? t('nav.logout') : undefined}

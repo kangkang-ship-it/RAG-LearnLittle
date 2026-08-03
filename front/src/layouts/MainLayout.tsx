@@ -21,16 +21,16 @@ export default function MainLayout() {
 
   return (
     <div className="flex h-screen relative overflow-hidden"
-      style={{ background: 'linear-gradient(135deg, #f0f6ff 0%, #e8f0fe 30%, #f5f9ff 60%, #dce8ff 100%)' }}>
+      style={{ background: 'var(--color-gradient-bg)' }}>
 
       {/* 低透明度浮动圆角矩形装饰 */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden" aria-hidden="true">
         <div className="absolute -top-16 -right-20 w-72 h-72 rounded-[40px] rotate-12"
-          style={{ background: 'rgba(22,119,255,0.04)' }} />
+          style={{ background: 'var(--color-decor-1)' }} />
         <div className="absolute top-1/3 -left-16 w-56 h-56 rounded-[32px] -rotate-6"
-          style={{ background: 'rgba(22,119,255,0.03)' }} />
+          style={{ background: 'var(--color-decor-2)' }} />
         <div className="absolute -bottom-20 right-1/4 w-64 h-64 rounded-[36px] rotate-45"
-          style={{ background: 'rgba(22,119,255,0.035)' }} />
+          style={{ background: 'var(--color-decor-3)' }} />
       </div>
 
       {/* 侧边导航栏 */}

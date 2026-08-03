@@ -190,7 +190,7 @@ export default function NoteEditor() {
       <div className="flex items-center justify-between mb-6">
         <button
           onClick={() => navigate('/notes')}
-          className="flex items-center gap-1 text-[#5a6a8a] hover:text-[#1677ff] transition-colors"
+          className="flex items-center gap-1 text-[var(--color-text-secondary)] hover:text-[var(--color-accent)] transition-colors"
         >
           <ArrowLeft size={18} />
           {t('common.back')}
@@ -198,7 +198,7 @@ export default function NoteEditor() {
         <div className="flex items-center gap-2">
           <button
             onClick={handleExport}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl border border-[#d4dff0] text-[#1677ff] text-sm hover:bg-[#e8f0fe] transition-all duration-200"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl border border-[var(--color-border)] text-[var(--color-accent)] text-sm hover:bg-[var(--color-accent-bg)] transition-all duration-200"
             title="导出为 Markdown 文件"
           >
             <Download size={16} />
@@ -206,7 +206,7 @@ export default function NoteEditor() {
           </button>
           <button
             onClick={handleSave}
-            className="flex items-center gap-2 px-4 py-2 rounded-[999px] bg-[#1677ff] text-white text-sm hover:bg-[#0d5bd6] active:scale-[0.98] transition-all duration-200 shadow-[0_4px_14px_rgba(22,119,255,0.3)]"
+            className="flex items-center gap-2 px-4 py-2 rounded-[999px] bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm hover:bg-[var(--color-accent-hover)] active:scale-[0.98] transition-all duration-200 shadow-[var(--shadow-accent-md)]"
           >
             <Save size={16} />
             {t('note.save')}
@@ -220,21 +220,21 @@ export default function NoteEditor() {
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         placeholder={t('note.title')}
-        className="w-full text-2xl font-heading font-bold bg-transparent border-none outline-none text-[#1a2a4a] mb-4"
+        className="w-full text-2xl font-heading font-bold bg-transparent border-none outline-none text-[var(--color-text)] mb-4"
       />
 
       {/* 标签和分类 */}
-      <div className="flex flex-wrap gap-4 mb-4 p-3 bg-white/80 rounded-xl border border-[#d4dff0] shadow-[0_2px_8px_rgba(22,119,255,0.06)]">
+      <div className="flex flex-wrap gap-4 mb-4 p-3 bg-[var(--color-card)]/80 rounded-xl border border-[var(--color-border)] shadow-[var(--shadow-card)]">
         <div className="flex-1 min-w-[200px]">
-          <label className="block text-xs text-[#9aa8c2] mb-1">{t('note.tags')}</label>
+          <label className="block text-xs text-[var(--color-text-tertiary)] mb-1">{t('note.tags')}</label>
           <TagInput tags={tags} onChange={setTags} />
         </div>
         <div className="w-40">
-          <label className="block text-xs text-[#9aa8c2] mb-1">{t('note.category')}</label>
+          <label className="block text-xs text-[var(--color-text-tertiary)] mb-1">{t('note.category')}</label>
           <select
             value={category}
             onChange={(e) => setCategory(e.target.value)}
-            className="w-full px-2 py-1 text-sm rounded-lg border border-[#d4dff0] bg-white text-[#1a2a4a] focus:outline-none focus:border-[#1677ff] focus:shadow-[0_0_0_3px_rgba(22,119,255,0.08)] transition-all duration-200"
+            className="w-full px-2 py-1 text-sm rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-accent)] transition-all duration-200"
           >
             <option value="">未分类</option>
             <option value="工作">工作</option>
@@ -244,7 +244,7 @@ export default function NoteEditor() {
           </select>
         </div>
         <div className="flex items-end">
-          <label className="flex items-center gap-2 text-sm text-[#5a6a8a] cursor-pointer">
+          <label className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] cursor-pointer">
             <input
               type="checkbox"
               checked={isPinned}
@@ -257,19 +257,19 @@ export default function NoteEditor() {
       </div>
 
       {/* Markdown 分栏编辑器 */}
-      <div className="border border-[#d4dff0] rounded-xl bg-white overflow-hidden shadow-[0_2px_8px_rgba(22,119,255,0.06)]">
+      <div className="border border-[var(--color-border)] rounded-xl bg-[var(--color-card)] overflow-hidden shadow-[var(--shadow-card)]">
         {/* 工具栏 */}
-        <div className="flex flex-wrap items-center gap-0.5 px-2 py-1.5 border-b border-[#d4dff0] bg-[#f8faff]">
+        <div className="flex flex-wrap items-center gap-0.5 px-2 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
           {editorMode !== 'preview' && toolbarActions.map((item, i) =>
             'type' in item && item.type === 'divider' ? (
-              <div key={i} className="w-px h-5 bg-[#d4dff0] mx-1" />
+              <div key={i} className="w-px h-5 bg-[var(--color-border)] mx-1" />
             ) : (
               <button
                 key={i}
                 type="button"
                 onClick={'action' in item ? item.action : undefined}
                 title={'title' in item ? item.title : ''}
-                className="p-1.5 rounded-lg text-[#5a6a8a] hover:bg-[#e8f0fe] hover:text-[#1677ff] transition-all duration-200"
+                className="p-1.5 rounded-lg text-[var(--color-text-secondary)] hover:bg-[var(--color-accent-bg)] hover:text-[var(--color-accent)] transition-all duration-200"
               >
                 {'icon' in item && item.icon}
               </button>
@@ -277,15 +277,15 @@ export default function NoteEditor() {
           )}
           {/* 模式切换 + 标签 */}
           <div className="ml-auto flex items-center gap-1">
-            <div className="flex items-center rounded-lg border border-[#d4dff0] overflow-hidden">
+            <div className="flex items-center rounded-lg border border-[var(--color-border)] overflow-hidden">
               <button
                 type="button"
                 onClick={() => setEditorMode('edit')}
                 title="纯编辑"
                 className={`p-1.5 transition-all duration-200 ${
                   editorMode === 'edit'
-                    ? 'bg-[#1677ff] text-white'
-                    : 'text-[#5a6a8a] hover:bg-[#e8f0fe] hover:text-[#1677ff]'
+                    ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
+                    : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-accent-bg)] hover:text-[var(--color-accent)]'
                 }`}
               >
                 <Pencil size={14} />
@@ -315,7 +315,7 @@ export default function NoteEditor() {
                 <Eye size={14} />
               </button>
             </div>
-            <span className="text-xs text-[#9aa8c2] select-none ml-1">Markdown</span>
+            <span className="text-xs text-[var(--color-text-tertiary)] select-none ml-1">Markdown</span>
           </div>
         </div>
 
@@ -324,10 +324,10 @@ export default function NoteEditor() {
           {/* 左侧：Markdown 源码编辑 */}
           {editorMode !== 'preview' && (
             <div className={`flex flex-col transition-all duration-300 ${
-              editorMode === 'edit' ? 'w-full' : 'w-1/2 border-r border-[#d4dff0]'
+              editorMode === 'edit' ? 'w-full' : 'w-1/2 border-r border-[var(--color-border)]'
             }`}>
               {editorMode === 'edit' && (
-                <div className="px-3 py-1.5 text-xs text-[#9aa8c2] border-b border-[#d4dff0] bg-[#fafcff] select-none">
+                <div className="px-3 py-1.5 text-xs text-[var(--color-text-tertiary)] border-b border-[var(--color-border)] bg-[var(--color-surface-alt)] select-none">
                   编辑
                 </div>
               )}
@@ -336,7 +336,7 @@ export default function NoteEditor() {
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
                 placeholder={t('note.content')}
-                className="flex-1 w-full resize-none p-4 text-sm leading-relaxed text-[#1a2a4a] bg-transparent outline-none font-[var(--font-mono)]"
+                className="flex-1 w-full resize-none p-4 text-sm leading-relaxed text-[var(--color-text)] bg-transparent outline-none font-[var(--font-mono)]"
                 spellCheck={false}
               />
             </div>
@@ -348,7 +348,7 @@ export default function NoteEditor() {
               editorMode === 'preview' ? 'w-full' : 'w-1/2'
             }`}>
               {editorMode === 'preview' && (
-                <div className="px-3 py-1.5 text-xs text-[#9aa8c2] border-b border-[#d4dff0] bg-[#fafcff] select-none">
+                <div className="px-3 py-1.5 text-xs text-[var(--color-text-tertiary)] border-b border-[var(--color-border)] bg-[var(--color-surface-alt)] select-none">
                   预览
                 </div>
               )}
@@ -363,7 +363,7 @@ export default function NoteEditor() {
                     </ReactMarkdown>
                   </div>
                 ) : (
-                  <p className="text-[#9aa8c2] text-sm italic">预览区域</p>
+                  <p className="text-[var(--color-text-tertiary)] text-sm italic">预览区域</p>
                 )}
               </div>
             </div>

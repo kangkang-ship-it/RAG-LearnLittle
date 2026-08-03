@@ -12,19 +12,19 @@ import { Shield, Camera, Folder, Monitor, Cloud, Globe } from 'lucide-react';
 ───────────────────────────────────────────── */
 export function GeometricBackground() {
   const blocks = [
-    { w: 320, h: 140, top: '0%', left: '3%', rot: 6, color: 'rgba(220,235,255,0.55)', r: 24 },
-    { w: 200, h: 180, top: '55%', left: '0%', rot: -4, color: 'rgba(255,255,255,0.7)', r: 20 },
-    { w: 160, h: 240, top: '5%', left: '28%', rot: -8, color: 'rgba(240,248,255,0.65)', r: 18 },
-    { w: 240, h: 100, top: '72%', left: '20%', rot: 10, color: 'rgba(210,230,255,0.45)', r: 16 },
-    { w: 120, h: 120, top: '32%', left: '12%', rot: 18, color: 'rgba(255,255,255,0.6)', r: 14 },
-    { w: 340, h: 110, top: '12%', right: '5%', rot: -5, color: 'rgba(225,240,255,0.5)', r: 26 },
-    { w: 180, h: 200, top: '48%', right: '3%', rot: 8, color: 'rgba(255,255,255,0.65)', r: 18 },
-    { w: 140, h: 90, bottom: '5%', right: '18%', rot: -6, color: 'rgba(215,232,255,0.4)', r: 14 },
-    { w: 100, h: 160, top: '38%', left: '42%', rot: 14, color: 'rgba(245,250,255,0.5)', r: 12 },
-    { w: 260, h: 80, bottom: '18%', left: '35%', rot: -2, color: 'rgba(230,242,255,0.35)', r: 16 },
-    { w: 60, h: 60, top: '20%', left: '55%', rot: 30, color: 'rgba(22,119,255,0.06)', r: 10 },
-    { w: 80, h: 50, bottom: '30%', left: '10%', rot: -15, color: 'rgba(255,255,255,0.75)', r: 10 },
-    { w: 50, h: 70, top: '65%', right: '30%', rot: 22, color: 'rgba(200,225,255,0.35)', r: 8 },
+    { w: 320, h: 140, top: '0%', left: '3%', rot: 6, color: 'var(--color-geo-1)', r: 24 },
+    { w: 200, h: 180, top: '55%', left: '0%', rot: -4, color: 'var(--color-geo-2)', r: 20 },
+    { w: 160, h: 240, top: '5%', left: '28%', rot: -8, color: 'var(--color-geo-3)', r: 18 },
+    { w: 240, h: 100, top: '72%', left: '20%', rot: 10, color: 'var(--color-geo-4)', r: 16 },
+    { w: 120, h: 120, top: '32%', left: '12%', rot: 18, color: 'var(--color-geo-5)', r: 14 },
+    { w: 340, h: 110, top: '12%', right: '5%', rot: -5, color: 'var(--color-geo-6)', r: 26 },
+    { w: 180, h: 200, top: '48%', right: '3%', rot: 8, color: 'var(--color-geo-7)', r: 18 },
+    { w: 140, h: 90, bottom: '5%', right: '18%', rot: -6, color: 'var(--color-geo-8)', r: 14 },
+    { w: 100, h: 160, top: '38%', left: '42%', rot: 14, color: 'var(--color-geo-9)', r: 12 },
+    { w: 260, h: 80, bottom: '18%', left: '35%', rot: -2, color: 'var(--color-geo-10)', r: 16 },
+    { w: 60, h: 60, top: '20%', left: '55%', rot: 30, color: 'var(--color-geo-11)', r: 10 },
+    { w: 80, h: 50, bottom: '30%', left: '10%', rot: -15, color: 'var(--color-geo-12)', r: 10 },
+    { w: 50, h: 70, top: '65%', right: '30%', rot: 22, color: 'var(--color-geo-13)', r: 8 },
   ];
 
   return (
@@ -37,7 +37,7 @@ export function GeometricBackground() {
           background: b.color,
           borderRadius: b.r,
           backdropFilter: 'blur(1px)',
-          boxShadow: '0 2px 16px rgba(22,119,255,0.05), 0 1px 3px rgba(0,0,0,0.02)',
+          boxShadow: 'var(--color-geo-shadow)',
         }} />
       ))}
     </>

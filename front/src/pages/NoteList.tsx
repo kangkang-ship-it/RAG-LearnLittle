@@ -122,7 +122,7 @@ export default function NoteList() {
     <div>
       {/* 顶部操作栏 */}
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-heading font-bold text-[#1a2a4a]">
+        <h1 className="text-2xl font-heading font-bold text-[var(--color-text)]">
           {t('nav.notes')}
         </h1>
         <div className="flex items-center gap-2">
@@ -151,14 +151,14 @@ export default function NoteList() {
             <>
               <button
                 onClick={() => setBatchMode(true)}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-[#d4dff0] text-[#1677ff] text-sm hover:bg-[#e8f0fe] transition-all duration-200"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-[var(--color-border)] text-[var(--color-accent)] text-sm hover:bg-[var(--color-accent-bg)] transition-all duration-200"
               >
                 <CheckSquare size={15} />
                 批量
               </button>
               <button
                 onClick={() => navigate('/notes/new')}
-                className="flex items-center gap-2 px-4 py-2 rounded-[999px] bg-[#1677ff] text-white text-sm hover:bg-[#0d5bd6] active:scale-[0.98] transition-all duration-200 shadow-[0_4px_14px_rgba(22,119,255,0.3)]"
+                className="flex items-center gap-2 px-4 py-2 rounded-[999px] bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm hover:bg-[var(--color-accent-hover)] active:scale-[0.98] transition-all duration-200 shadow-[var(--shadow-accent-md)]"
               >
                 <Plus size={16} />
                 {t('note.create')}
@@ -170,13 +170,13 @@ export default function NoteList() {
 
       {/* 搜索框 */}
       <div className="relative mb-4">
-        <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#1677ff]" />
+        <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-accent)]" />
         <input
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder={t('note.search')}
-          className="w-full pl-10 pr-4 py-2 rounded-xl border border-[#d4dff0] bg-white/80 text-[#1a2a4a] placeholder:text-[#9aa8c2] focus:outline-none focus:border-[#1677ff] focus:shadow-[0_0_0_3px_rgba(22,119,255,0.08)] hover:border-[#c8d0da] transition-all duration-200"
+          className="w-full pl-10 pr-4 py-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-card)]/80 text-[var(--color-text)] placeholder:text-[var(--color-text-tertiary)] focus:outline-none focus:border-[var(--color-accent)] hover:border-[var(--color-text-tertiary)] transition-all duration-200"
         />
       </div>
 
@@ -188,8 +188,8 @@ export default function NoteList() {
             onClick={() => setCategory(cat)}
             className={`px-3 py-1.5 rounded-xl text-sm whitespace-nowrap transition-all duration-200 ${
               category === cat
-                ? 'bg-[#1677ff] text-white shadow-[0_2px_8px_rgba(22,119,255,0.3)]'
-                : 'bg-[#e8f0fe] text-[#1677ff] hover:bg-[#d4e4ff]'
+                ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)] shadow-[var(--shadow-accent-sm)]'
+                : 'bg-[var(--color-accent-bg)] text-[var(--color-accent)] hover:opacity-80'
             }`}
           >
             {cat || t('note.all')}
@@ -219,10 +219,10 @@ export default function NoteList() {
           {notes.map((note) => (
             <div
               key={note.id}
-              className={`group relative bg-white rounded-2xl p-4 border transition-all duration-200 hover:shadow-[0_6px_20px_rgba(22,119,255,0.12)] ${
+              className={`group relative bg-[var(--color-card)] rounded-2xl p-4 border transition-all duration-200 hover:shadow-[var(--shadow-accent-lg)] ${
                 selectedIds.has(note.id)
-                  ? 'border-[#1677ff] ring-1 ring-[#1677ff] shadow-[0_2px_8px_rgba(22,119,255,0.06)]'
-                  : 'border-[#d4dff0] shadow-[0_2px_8px_rgba(22,119,255,0.06)]'
+                  ? 'border-[var(--color-accent)] ring-1 ring-[var(--color-accent)] shadow-[var(--shadow-card)]'
+                  : 'border-[var(--color-border)] shadow-[var(--shadow-card)]'
               } ${batchMode ? 'cursor-pointer' : 'cursor-pointer'}`}
               onClick={() => {
                 if (batchMode) {
@@ -264,12 +264,12 @@ export default function NoteList() {
               )}
 
               <div className="flex items-center gap-2 mb-2">
-                {note.is_pinned && <Pin size={14} className="text-[#1677ff]" />}
-                <h3 className="font-heading font-medium text-[#1a2a4a] truncate">
+                {note.is_pinned && <Pin size={14} className="text-[var(--color-accent)]" />}
+                <h3 className="font-heading font-medium text-[var(--color-text)] truncate">
                   {note.title}
                 </h3>
               </div>
-              <p className="text-sm text-[#5a6a8a] line-clamp-3 mb-3">
+              <p className="text-sm text-[var(--color-text-secondary)] line-clamp-3 mb-3">
                 {note.content.slice(0, 150)}
               </p>
               {note.tags && note.tags.length > 0 && (
@@ -279,7 +279,7 @@ export default function NoteList() {
                   ))}
                 </div>
               )}
-              <div className="mt-3 text-xs text-[#9aa8c2]">
+              <div className="mt-3 text-xs text-[var(--color-text-tertiary)]">
                 {new Date(note.updated_at).toLocaleDateString()}
                 {note.category && ` · ${note.category}`}
               </div>
@@ -294,7 +294,7 @@ export default function NoteList() {
           <button
             onClick={() => loadNotes()}
             disabled={loading}
-            className="px-6 py-2 text-sm text-[#1677ff] border border-[#d4dff0] rounded-xl hover:bg-[#e8f0fe] transition-all duration-200"
+            className="px-6 py-2 text-sm text-[var(--color-accent)] border border-[var(--color-border)] rounded-xl hover:bg-[var(--color-accent-bg)] transition-all duration-200"
           >
             {loading ? t('common.loading') : '加载更多'}
           </button>

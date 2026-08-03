@@ -128,20 +128,20 @@ export default function Sessions() {
           <div
             style={{
               width: '100%', maxWidth: '28rem', padding: '1.5rem',
-              backgroundColor: '#fff', borderRadius: '1rem',
-              boxShadow: '0 12px 48px rgba(22,119,255,0.1)', border: '1px solid #d4dff0',
+              backgroundColor: 'var(--color-card)', borderRadius: '1rem',
+              boxShadow: 'var(--shadow-dialog)', border: '1px solid var(--color-border)',
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 style={{ fontSize: '1.125rem', fontWeight: 700, color: '#1a2a4a', margin: 0 }}>确认删除</h3>
-            <p style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: '#5a6a8a' }}>删除后不可恢复，对话记录将永久丢失。</p>
+            <h3 style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--color-text)', margin: 0 }}>确认删除</h3>
+            <p style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>删除后不可恢复，对话记录将永久丢失。</p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1.5rem' }}>
               <button onClick={() => setDeleteId(null)}
-                style={{ padding: '0.5rem 1rem', fontSize: '0.875rem', borderRadius: '0.75rem', border: '1px solid #d4dff0', backgroundColor: '#fff', color: '#5a6a8a', cursor: 'pointer' }}>
+                style={{ padding: '0.5rem 1rem', fontSize: '0.875rem', borderRadius: '0.75rem', border: '1px solid var(--color-border)', backgroundColor: 'var(--color-card)', color: 'var(--color-text-secondary)', cursor: 'pointer' }}>
                 取消
               </button>
               <button onClick={handleDelete}
-                style={{ padding: '0.5rem 1rem', fontSize: '0.875rem', borderRadius: '999px', border: 'none', backgroundColor: '#e05555', color: '#fff', cursor: 'pointer' }}>
+                style={{ padding: '0.5rem 1rem', fontSize: '0.875rem', borderRadius: '999px', border: 'none', backgroundColor: 'var(--color-danger)', color: '#fff', cursor: 'pointer' }}>
                 删除
               </button>
             </div>

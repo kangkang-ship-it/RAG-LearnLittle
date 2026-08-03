@@ -63,7 +63,7 @@ export default function TiptapEditor({
   if (!editor) return null;
 
   return (
-    <div className="border border-[#d4dff0] rounded-xl bg-white overflow-hidden shadow-[0_2px_8px_rgba(22,119,255,0.06)]">
+    <div className="border border-[var(--color-border)] rounded-xl bg-[var(--color-card)] overflow-hidden shadow-[var(--shadow-card)]">
       {/* 工具栏 */}
       {editable && (
         <Toolbar editor={editor} />
@@ -78,7 +78,7 @@ export default function TiptapEditor({
 /** 工具栏组件 */
 function Toolbar({ editor }: { editor: Editor }) {
   return (
-    <div className="flex flex-wrap items-center gap-0.5 px-2 py-1.5 border-b border-[#d4dff0] bg-[#f8faff]">
+    <div className="flex flex-wrap items-center gap-0.5 px-2 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
       {/* 文本格式 */}
       <ToolbarBtn
         active={editor.isActive('bold')}
@@ -220,8 +220,8 @@ function ToolbarBtn({
       className={`
         p-1.5 rounded-lg transition-all duration-200
         ${active
-          ? 'bg-[#1677ff] text-white shadow-[0_2px_6px_rgba(22,119,255,0.3)]'
-          : 'text-[#5a6a8a] hover:bg-[#e8f0fe] hover:text-[#1677ff]'
+          ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)] shadow-[var(--shadow-accent-sm)]'
+          : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-accent-bg)] hover:text-[var(--color-accent)]'
         }
         disabled:opacity-30 disabled:cursor-not-allowed
       `}
@@ -233,5 +233,5 @@ function ToolbarBtn({
 
 /** 工具栏分隔线 */
 function Divider() {
-  return <div className="w-px h-5 bg-[#d4dff0] mx-1" />;
+  return <div className="w-px h-5 bg-[var(--color-border)] mx-1" />;
 }
