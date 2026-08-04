@@ -51,6 +51,7 @@ class ErrorCode:
     USER_NOT_FOUND = 40403              # 用户不存在
     DOCUMENT_NOT_FOUND = 40404          # 知识库文档不存在
     DEVICE_SESSION_NOT_FOUND = 40405    # 设备会话不存在
+    ATTACHMENT_NOT_FOUND = 40406        # 聊天附件不存在
     
     # 409xx - 冲突
     USERNAME_EXISTS = 40901             # 用户名已存在
@@ -88,6 +89,7 @@ _ERROR_MESSAGES = {
     ErrorCode.USER_NOT_FOUND: "用户不存在",
     ErrorCode.DOCUMENT_NOT_FOUND: "知识库文档不存在",
     ErrorCode.DEVICE_SESSION_NOT_FOUND: "设备会话不存在",
+    ErrorCode.ATTACHMENT_NOT_FOUND: "聊天附件不存在",
     ErrorCode.USERNAME_EXISTS: "用户名已存在",
     ErrorCode.IDEMPOTENCY_DUPLICATE: "请求重复提交",
     ErrorCode.EMAIL_EXISTS: "该邮箱已被使用",

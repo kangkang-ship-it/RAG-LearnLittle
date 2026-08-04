@@ -13,28 +13,33 @@
 import asyncio
 import json
 import os
+from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, Query, UploadFile, File, Header
+from fastapi.responses import StreamingResponse, FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logger_handler import logger
 from app.core.success_response import success_response
 from app.core.rate_limit import rate_limit
+from app.core.failed_response import BusinessError, ErrorCode
+from app.core.model_trace import set_trace_context, clear_trace_context, set_trace_stage, new_request_id
 from app.db.database import get_db, async_session_factory
 from app.schemas.chat import (
     QueryRequest, RAGRequest, ChatSessionListResponse,
-    MessageListResponse, SessionTitleUpdate,
+    MessageListResponse, SessionTitleUpdate, UploadResponse,
 )
 from app.utils.auth_utils import get_current_user_id
 from app.services.chat_service import ChatService
 from app.services.database_session_manager import DatabaseSessionManager
+from app.services.chat_attachment_service import ChatAttachmentService
 
 router = APIRouter()
 
 # 服务实例
 chat_service = ChatService()
 session_manager = DatabaseSessionManager()
+chat_attachment_service = ChatAttachmentService()
 
 # LLM 流式响应超时时间（秒）
 LLM_STREAM_TIMEOUT = int(os.getenv("LLM_STREAM_TIMEOUT", "60"))
@@ -43,6 +48,31 @@ LLM_STREAM_TIMEOUT = int(os.getenv("LLM_STREAM_TIMEOUT", "60"))
 # 防止恶意用户通过大量 SSE 连接耗尽服务器资源
 SSE_MAX_CONNECTIONS_PER_USER = 3
 _sse_active_counts: dict[str, int] = {}
+
+
+class _AttachmentOnlyClassification:
+    """仅附件消息的分类结果（无文本可分类，直接走 ReAct 多模态路径）"""
+    complexity = "simple"
+    source = "attachment"
+    reason = "仅附件消息，无文本可分类"
+
+
+def _estimate_attachment_tokens(attachments) -> int:
+    """
+    估算当前消息附件的 token 消耗（用于历史配额扣减，优先保证当前消息）
+
+    图片按分辨率估算；视频按抽帧数 × 2000 估算。
+    """
+    from app.services.token_budget import TokenCounter
+
+    total = 0
+    video_frames = int(os.getenv("VIDEO_FRAME_COUNT", "8"))
+    for att in attachments:
+        if att.file_type == "image":
+            total += TokenCounter.count_image(att.width, att.height)
+        elif att.file_type == "video":
+            total += video_frames * 2000
+    return total
 
 
 @router.post("/chat/query", summary="Agent 流式对话", dependencies=[Depends(rate_limit(endpoint_limit=10))])
@@ -64,15 +94,56 @@ async def chat_query(
     from main import init_manager
     from app.db.database import async_session_factory
     
+    # ===== 附件处理（加载归属校验 + 绑定会话 + 随消息保存元数据）=====
+    attachments = []
+    attachment_meta_json = None
+    attachment_names = []
+    user_msg_id = None
+
     try:
         # 使用独立 session 获取或创建会话（不依赖请求级 db）
         async with async_session_factory() as db:
             session_id = await chat_service.get_or_create_session(db, user_id, data.session_id)  # 获取Session_id,如果已经存在就返回，否则创建一个新的session
+            # 设置模型调用 trace 上下文（P0）：请求 ID + 用户 + 会话，供 factory 层回调读取
+            set_trace_context(new_request_id(), user_id=user_id, session_id=session_id, stage="chat")
+            # 附件归属校验（不属于当前用户的 ID 直接忽略）+ 绑定会话（脱离孤儿状态）
+            if data.attachment_ids:
+                attachments = await chat_attachment_service.get_owned_list(
+                    db, user_id, data.attachment_ids
+                )
+                if attachments:
+                    await chat_attachment_service.bind_session(
+                        db, user_id, [a.file_id for a in attachments], session_id
+                    )
             await db.commit()  # 提交事务，确保会话创建成功
-        
+
+        # 附件元数据（冗余存储到 chat_messages.attachments_json，供历史回显）
+        if attachments:
+            attachment_meta_json = [
+                {
+                    "file_id": a.file_id,
+                    "file_type": a.file_type,
+                    "original_name": a.original_name,
+                    "file_size": a.file_size,
+                    "mime_type": a.mime_type,
+                    "width": a.width,
+                    "height": a.height,
+                    "duration_sec": a.duration_sec,
+                }
+                for a in attachments
+            ]
+            attachment_names = [a.original_name for a in attachments]
+
+        # 用户消息内容兜底（空文本 + 附件 → 占位内容，避免空串入库）
+        user_content = data.message
+        if not user_content.strip() and attachment_meta_json:
+            user_content = "[视频]" if any(a.file_type == "video" for a in attachments) else "[图片]"
+
         # 保存用户消息（使用独立 session + commit，确保持久化）
-        await chat_service.save_message_with_commit(
-            session_id, user_id, "user", data.message, data.idempotency_key
+        user_msg_id = await chat_service.save_message_with_commit(
+            session_id, user_id, "user", user_content,
+            data.idempotency_key,
+            attachments_json=attachment_meta_json,
         )
     except Exception as e:
         logger.error(f"会话/消息初始化失败: {type(e).__name__}: {e}", exc_info=True)
@@ -90,15 +161,30 @@ async def chat_query(
                 yield f"data: {json.dumps({'type': 'error', 'content': 'AI 模型初始化超时，请稍后重试'})}\n\n"
             return StreamingResponse(timeout_stream(), media_type="text/event-stream")
     
-    # 根据前端"深度思考"开关选择模型实例
-    # 默认使用思考关闭的模型（响应更快）；开启时使用深度思考实例（质量更高）
-    if data.enable_thinking and getattr(init_manager, "chat_model_thinking", None):
-        chat_model = init_manager.chat_model_thinking
+    # 模型选择（两个实例分工）：
+    # - chat_model：文本任务模型（会话标题 / RAG / 记忆摘要），始终用主模型，不受附件影响
+    # - agent_model：执行 Agent 链路的模型——
+    #     附件（图片/视频）请求 → 视觉模型（设计 §6.1：VISION_MODEL 与聊天主模型分离）
+    #     纯文本 + 深度思考   → 思考模型实例
+    #     默认              → 主模型
+    # ⚠️ 附件 + 深度思考：深度思考对附件场景自动失效（视觉模型不支持思考，
+    #    且 qwen3.8-max thinking + 多模态实测首 token 延迟 >60s 必超时）
+    chat_model = init_manager.chat_model
+    if attachments:
+        vision_model = getattr(init_manager, "vision_model", None)
+        if vision_model:
+            agent_model = vision_model
+            logger.info(f"附件请求使用视觉模型: {getattr(vision_model, 'model_name', 'vision_model')} (user={user_id[:8]})")
+        else:
+            agent_model = chat_model
+            logger.warning(f"视觉模型不可用，附件理解降级主模型: user={user_id[:8]}")
+    elif data.enable_thinking and getattr(init_manager, "chat_model_thinking", None):
+        agent_model = init_manager.chat_model_thinking
         logger.debug(f"深度思考模式已开启: user={user_id[:8]}")
     else:
-        chat_model = init_manager.chat_model
+        agent_model = chat_model
 
-    if not chat_model:
+    if not chat_model or not agent_model:
         # 模型未初始化，返回错误 SSE
         async def error_stream():
             yield f"data: {json.dumps({'type': 'error', 'content': 'AI 模型未初始化'})}\n\n"
@@ -111,9 +197,12 @@ async def chat_query(
             yield f"data: {json.dumps({'type': 'error', 'content': '并发连接数已达上限（最多 %d 个），请关闭多余标签页后重试' % SSE_MAX_CONNECTIONS_PER_USER})}\n\n"
         return StreamingResponse(limit_stream(), media_type="text/event-stream")
     
-    # 后台触发自动更新会话标题（非阻塞，chat_model 已就绪）
+    # 后台触发自动更新会话标题（非阻塞，chat_model 已就绪；仅发附件时用附件名兜底）
     asyncio.create_task(
-        chat_service.generate_and_update_title(session_id, data.message, chat_model)
+        chat_service.generate_and_update_title(
+            session_id, data.message, chat_model,
+            attachment_names=attachment_names or None,
+        )
     )
     
     # ===== 并行执行 RAG 检索 + 记忆压缩（两者无数据依赖）=====
@@ -132,6 +221,8 @@ async def chat_query(
     async def _run_rag():
         """RAG 检索协程（含路由判断：与知识库无关的查询跳过 RAG）"""
         nonlocal rag_context, rag_sources
+        if not data.message.strip():
+            return  # 仅附件消息：无查询文本，跳过 RAG
         try:
             await asyncio.wait_for(init_manager.stage2_complete.wait(), timeout=5)
             
@@ -201,12 +292,19 @@ async def chat_query(
             )
             
             all_messages = [
-                {"role": m.role, "content": m.content}
+                {
+                    "role": m.role,
+                    "content": m.content,
+                    "attachments": m.attachments_json or [],
+                }
                 for m in all_msgs
             ]
             existing_summary = summary_obj.summary_text if summary_obj else ""
             prev_messages = all_messages[:-1] if all_messages else []
-            
+
+            # 预加载历史附件图片 base64（最近 2 条用户消息，支持"上一张图里…"追问）
+            await _preload_history_images(prev_messages)
+
             # 先用估算值创建 budget（RAG 上下文长度未知时用默认值）
             budget = TokenBudget(
                 model_context_size=tb_config.get("model_context_size", 32768),
@@ -216,10 +314,14 @@ async def chat_query(
                 agent_scratchpad_reserve=tb_config.get("agent_scratchpad_reserve", 4000),
                 current_input_estimate=tb_config.get("current_input_estimate", 300),
                 safety_margin=tb_config.get("safety_margin", 1000),
+                image_tokens_per_msg=tb_config.get("image_tokens_per_msg", 3000),
+                max_history_images=tb_config.get("max_history_images", 4),
             )
             # 用 RAG 最大配额估算（实际 RAG 结果未就绪时用上限值）
             history_quota = budget.allocate("" * tb_config.get("rag_context_max", 2000))
-            
+            # 当前消息附件 token 从历史配额中扣减（优先保证当前消息）
+            history_quota = max(500, history_quota - _estimate_attachment_tokens(attachments))
+
             compressor = MemoryCompressor(budget)
             compressed_messages, history_tokens = compressor.build_context(
                 all_messages=prev_messages,
@@ -256,12 +358,71 @@ async def chat_query(
                     role = msg.get("role", "")
                     content = msg.get("content", "")
                     if role == "user":
+                        # 附件以文本占位（降级路径不做图片预编码，保证 Agent 感知附件存在）
+                        atts = msg.get("attachments_json") or []
+                        if atts:
+                            names = [
+                                a.get("original_name", "附件")
+                                for a in atts if isinstance(a, dict)
+                            ]
+                            content = f"{content}\n[附件: {', '.join(names[:3])}]"
                         compressed_messages.append(HumanMessage(content=content))
                     elif role == "assistant":
                         compressed_messages.append(AIMessage(content=content))
             except Exception:
                 pass
     
+    async def _preload_history_images(msgs: list) -> None:
+        """
+        预加载历史消息附件图片的 base64（多模态回放用）
+
+        最多处理最近 max_user_msgs 条带图片附件的用户消息，每条最多 max_history_images 张；
+        图片压缩走线程池（CPU 密集），结果按 file_id 缓存（与当前消息处理共享缓存）。
+        attachments_json 不含存储路径，需查 chat_attachments 权威表。
+        """
+        from app.ai_service.multimodal_processor import process_image_to_base64
+
+        max_user_msgs = 2
+        max_images = int(os.getenv("CHAT_MAX_IMAGES_PER_MSG", "6"))
+        processed = 0
+        for msg in reversed(msgs):
+            if processed >= max_user_msgs:
+                break
+            atts = msg.get("attachments") or []
+            images = [
+                a for a in atts
+                if isinstance(a, dict) and a.get("file_type") == "image"
+            ]
+            if not images:
+                continue
+            processed += 1
+            images = images[-max_images:]
+            file_ids = [a["file_id"] for a in images]
+            try:
+                async with async_session_factory() as db:
+                    rows = await chat_attachment_service.get_owned_list(db, user_id, file_ids)
+            except Exception as e:
+                logger.debug(f"历史附件路径查询失败: {e}")
+                continue
+            path_map = {r.file_id: r.stored_path for r in rows}
+            b64s = []
+            for img in images:
+                rel_path = path_map.get(img["file_id"])
+                if not rel_path:
+                    continue
+                abs_path = os.path.join(os.getcwd(), rel_path)
+                if not os.path.isfile(abs_path):
+                    continue
+                try:
+                    b64 = await asyncio.to_thread(
+                        process_image_to_base64, abs_path, img["file_id"]
+                    )
+                    b64s.append(b64)
+                except Exception as e:
+                    logger.debug(f"历史图片预编码失败: file_id={img['file_id'][:8]}, err={e}")
+            msg["image_b64s"] = b64s
+            logger.debug(f"历史附件图片预编码: {len(b64s)} 张 (message attachments={len(images)})")
+
     # 并行执行 RAG + 记忆压缩
     await asyncio.gather(_run_rag(), _run_memory_compression())
     
@@ -311,12 +472,38 @@ async def chat_query(
             if rag_context:
                 yield f"data: {json.dumps({'type': 'thinking', 'stage': 'rag', 'content': f'已从知识库检索到 {len(rag_sources)} 个相关文档'})}\n\n"
             yield f"data: {json.dumps({'type': 'thinking', 'stage': 'processing', 'content': '正在思考...'})}\n\n"
-            
+
+            # ===== 附件多模态内容组装（图片压缩 / 视频抽帧，CPU 密集 → 线程池）=====
+            attachment_content = []
+            if attachments:
+                from app.ai_service.multimodal_processor import build_attachment_blocks_async
+                if data.enable_thinking:
+                    yield f"data: {json.dumps({'type': 'thinking', 'stage': 'attachment', 'content': '深度思考对附件场景自动关闭（视觉模型理解附件）'})}\n\n"
+                if getattr(init_manager, "vision_model", None) is None:
+                    yield f"data: {json.dumps({'type': 'thinking', 'stage': 'attachment', 'content': '视觉模型未就绪，当前只能基于文字回复'})}\n\n"
+                if any(a.file_type == "video" for a in attachments):
+                    yield f"data: {json.dumps({'type': 'thinking', 'stage': 'attachment', 'content': '正在解析视频（抽帧）...'})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'type': 'thinking', 'stage': 'attachment', 'content': '正在处理附件...'})}\n\n"
+                try:
+                    attachment_content = await build_attachment_blocks_async(attachments)
+                except Exception as e:
+                    logger.warning(f"附件多模态处理失败: {e}", exc_info=True)
+                    attachment_content = []
+                if attachment_content:
+                    yield f"data: {json.dumps({'type': 'thinking', 'stage': 'attachment', 'content': f'附件解析完成（{len(attachment_content)} 张图像）'})}\n\n"
+
             # ===== 查询复杂度分类 + 混合路由 =====
             from app.ai_service.query_classifier import QueryClassifier
-            
-            classifier = QueryClassifier(llm_model=getattr(init_manager, 'classifier_model', None))
-            classification = await classifier.classify(data.message)  # 分类结果包含 complexity, source, reason，判断复杂度
+
+            if data.message.strip():
+                set_trace_stage("classify")  # 模型 trace 阶段标记（P0）
+                classifier = QueryClassifier(llm_model=getattr(init_manager, 'classifier_model', None))
+                classification = await classifier.classify(data.message)  # 分类结果包含 complexity, source, reason，判断复杂度
+            else:
+                # 仅附件消息：无文本可分类，直接走 ReAct 多模态路径
+                classification = _AttachmentOnlyClassification()
+                logger.info("仅附件消息，跳过复杂度分类，直接走 ReAct 多模态路径")
             logger.info(
                 f"查询分类: complexity={classification.complexity}, "
                 f"source={classification.source}, reason={classification.reason}"
@@ -343,10 +530,11 @@ async def chat_query(
             
             if classification.complexity == "simple":
                 # ===== 简单问题：走现有 ReAct Agent（逻辑完全不变）=====
+                set_trace_stage("agent")  # 模型 trace 阶段标记（P0）
                 from app.ai_service.agent_runner import execute_agent
-                
+
                 async for event in execute_agent(
-                    chat_model=chat_model,
+                    chat_model=agent_model,
                     user_id=user_id,
                     user_message=data.message,
                     system_prompt=system_prompt,
@@ -356,6 +544,7 @@ async def chat_query(
                     review_service=review_service,
                     email_service=init_manager.email_service,
                     timeout=LLM_STREAM_TIMEOUT,
+                    attachment_content=attachment_content,
                 ):
                     event_type = event.get("type", "")
                     
@@ -369,6 +558,7 @@ async def chat_query(
                         break
             else:
                 # ===== 复杂问题：走 Plan-and-Execute Agent =====
+                set_trace_stage("plan_execute")  # 模型 trace 阶段标记（P0）
                 plan_model = getattr(init_manager, 'plan_model', None)  # 获取用于制定计划的模型
                 
                 if plan_model is None:
@@ -377,7 +567,7 @@ async def chat_query(
                     from app.ai_service.agent_runner import execute_agent
                     
                     async for event in execute_agent(
-                        chat_model=chat_model,
+                        chat_model=agent_model,
                         user_id=user_id,
                         user_message=data.message,
                         system_prompt=system_prompt,
@@ -386,6 +576,7 @@ async def chat_query(
                         note_service=note_service,
                         review_service=review_service,
                         timeout=LLM_STREAM_TIMEOUT,
+                        attachment_content=attachment_content,
                     ):
                         event_type = event.get("type", "")
                         if event_type == "response":
@@ -398,9 +589,9 @@ async def chat_query(
                             break
                 else:   # Plan 模型可用，执行 Plan-and-Execute
                     from app.ai_service.plan_execute_agent import execute_plan_agent
-                    
+
                     async for event in execute_plan_agent(
-                        chat_model=chat_model,
+                        chat_model=agent_model,
                         plan_model=plan_model,
                         user_id=user_id,
                         user_message=data.message,
@@ -411,6 +602,8 @@ async def chat_query(
                         review_service=review_service,
                         email_service=init_manager.email_service,
                         timeout=LLM_STREAM_TIMEOUT * 2,
+                        attachment_content=attachment_content,
+                        attachment_names=attachment_names or None,
                     ):
                         event_type = event.get("type", "")
                         
@@ -427,7 +620,7 @@ async def chat_query(
                             from app.ai_service.agent_runner import execute_agent
                             
                             async for fallback_event in execute_agent(
-                                chat_model=chat_model,
+                                chat_model=agent_model,
                                 user_id=user_id,
                                 user_message=data.message,
                                 system_prompt=system_prompt,
@@ -436,6 +629,7 @@ async def chat_query(
                                 note_service=note_service,
                                 review_service=review_service,
                                 timeout=LLM_STREAM_TIMEOUT,
+                                attachment_content=attachment_content,
                             ):
                                 ft = fallback_event.get("type", "")
                                 if ft == "response":
@@ -458,12 +652,25 @@ async def chat_query(
                             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             
             # 异步保存 AI 回复到数据库 + Redis（非阻塞，不延迟 done 事件）
+            # 回复保存成功后回填附件 message_id（绑定消息，禁止单独删除）
             if accumulated:
-                asyncio.create_task(
-                    chat_service.save_message_with_commit(
+                async def _save_reply_and_bind():
+                    await chat_service.save_message_with_commit(
                         session_id, user_id, "assistant", accumulated
                     )
-                )
+                    if user_msg_id and attachments:
+                        try:
+                            async with async_session_factory() as db:
+                                await chat_attachment_service.bind_message(
+                                    db, user_id,
+                                    [a.file_id for a in attachments],
+                                    session_id, user_msg_id,
+                                )
+                                await db.commit()
+                        except Exception as e:
+                            logger.warning(f"附件绑定消息失败: {e}")
+
+                asyncio.create_task(_save_reply_and_bind())
             
             # 发送完成事件（包含 RAG 来源信息）
             done_data = {'type': 'done', 'session_id': session_id}
@@ -551,6 +758,117 @@ async def rag_query(
         })
 
 
+# ============================================================
+# 聊天附件端点（图片/视频）
+# ============================================================
+
+@router.post("/chat/files", summary="上传聊天附件（图片/视频）", dependencies=[Depends(rate_limit(endpoint_limit=10))])
+async def upload_chat_file(
+    file: UploadFile = File(...),
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    上传图片/视频附件
+
+    校验：扩展名白名单 + magic bytes 双重校验、大小限制（图片 10MB / 视频 50MB）、
+    用户配额（USER_STORAGE_QUOTA_MB）。
+    上传后附件为孤儿状态（未绑定会话），24h 内未随消息发送会被定时清理。
+    """
+    content = await file.read()
+    async with async_session_factory() as db:
+        attachment = await chat_attachment_service.save_upload(
+            db, user_id, file.filename or "", content
+        )
+        # server_default 的 created_at 需显式刷新加载，且在 session 内取值
+        # （commit 后 session 关闭，延迟属性访问会抛 DetachedInstanceError）
+        await db.refresh(attachment)
+        resp_data = UploadResponse(
+            file_id=attachment.file_id,
+            file_type=attachment.file_type,
+            mime_type=attachment.mime_type,
+            original_name=attachment.original_name,
+            file_size=attachment.file_size,
+            width=attachment.width,
+            height=attachment.height,
+            duration_sec=attachment.duration_sec,
+            created_at=attachment.created_at,
+        ).model_dump()
+        await db.commit()
+
+    return success_response(data=resp_data)
+
+
+@router.get("/chat/files/{file_id}", summary="预览/下载聊天附件")
+async def get_chat_file(
+    file_id: str,
+    authorization: Optional[str] = Header(None),
+    token: str = Query(None, description="可选 JWT：<img>/<video> 标签无法携带 Header 时以 query 参数鉴权"),
+):
+    """
+    附件预览/下载（JWT 鉴权 + 归属校验）
+
+    文件不存在或不属于当前用户时统一返回 404（防枚举探测）。
+    Starlette FileResponse 原生支持 HTTP Range（视频拖动进度条）。
+
+    鉴权方式：
+    1. 常规：Authorization: Bearer <JWT>（fetch 等场景）
+    2. 回显兜底：?token=<JWT>（<img>/<video> 标签无法携带 Header）
+       token 为短时效 access token（默认 30 分钟），仅用于当次回显，风险可控。
+    """
+    from app.utils.auth_utils import decode_token
+    from app.core.failed_response import BusinessError as _BE
+    from app.core.failed_response import ErrorCode as _EC
+
+    # 解析 token：优先 Header，其次 query 参数
+    token_str = None
+    if authorization:
+        parts = authorization.split()
+        if len(parts) == 2 and parts[0].lower() == "bearer":
+            token_str = parts[1]
+    if not token_str:
+        token_str = token
+    if not token_str:
+        raise _BE(code=_EC.TOKEN_INVALID, message="缺少认证信息", http_status=401)
+
+    payload = decode_token(token_str)
+    if payload.get("type") != "access":
+        raise _BE(code=_EC.TOKEN_INVALID, message="Token 类型错误", http_status=401)
+    user_id = payload.get("sub", "")
+    if not user_id:
+        raise _BE(code=_EC.TOKEN_INVALID, message="Token 缺少用户标识", http_status=401)
+
+    async with async_session_factory() as db:
+        attachment = await chat_attachment_service.get_owned(db, user_id, file_id)
+
+    file_path = os.path.join(os.getcwd(), attachment.stored_path)
+    if not os.path.isfile(file_path):
+        raise BusinessError(code=ErrorCode.ATTACHMENT_NOT_FOUND, http_status=404)
+
+    return FileResponse(
+        file_path,
+        media_type=attachment.mime_type,
+        filename=attachment.original_name,
+        content_disposition_type="inline",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
+@router.delete("/chat/files/{file_id}", summary="删除未绑定附件")
+async def delete_chat_file(
+    file_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    删除附件（仅允许未绑定消息的附件）
+
+    已随消息发送的附件不可单独删除（随会话删除级联清理）。
+    """
+    async with async_session_factory() as db:
+        await chat_attachment_service.delete_unbound(db, user_id, file_id)
+        await db.commit()
+    return success_response(message="附件已删除")
+
+
 @router.get("/chat/sessions", summary="获取会话列表")
 async def list_sessions(
     user_id: str = Depends(get_current_user_id),
@@ -583,8 +901,15 @@ async def delete_session(
     session_id: str,
     user_id: str = Depends(get_current_user_id),
 ):
-    """删除指定会话及其所有消息"""
+    """
+    删除指定会话及其所有消息
+
+    级联清理会话附件（文件 + chat_attachments 行）：
+    先清附件（路由层职责，DatabaseSessionManager.delete_session 保持纯 DB 职责），
+    再删会话/消息（ORM cascade），最后统一 commit。
+    """
     async with async_session_factory() as db:
+        await chat_attachment_service.cleanup_by_session(db, session_id, user_id)
         await session_manager.delete_session(db, session_id, user_id)
         await db.commit()
     return success_response(message="会话已删除")

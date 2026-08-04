@@ -61,6 +61,14 @@ const en = {
   'chat.send': 'Send',
   'chat.thinking': 'Thinking...',
   'chat.stop': 'Stop generating',
+  'chat.attachmentUpload': 'Upload image/video',
+  'chat.attachmentUploading': 'Attachments are uploading, please wait',
+  'chat.attachmentFailed': 'Some attachments failed to upload, please remove and retry',
+  'chat.attachmentLimitImage': 'At most 6 images per message',
+  'chat.attachmentLimitVideo': 'At most 1 video per message',
+  'chat.attachmentTypeError': 'Unsupported file type (images/videos only)',
+  'chat.attachmentTooLarge': 'File exceeds size limit',
+  'chat.attachmentRemove': 'Remove attachment',
 
   // Knowledge
   'knowledge.upload': 'Upload Document',

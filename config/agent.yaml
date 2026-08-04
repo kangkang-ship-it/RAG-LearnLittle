@@ -42,6 +42,30 @@ classifier:
     - "^再见"
     - "^现在.*时间"
   rule_complex_min_length: 200    # 长消息判定阈值（字符数）
+  # L1 规则层补充（迁移自 query_classifier.py _rule_classify 的硬编码）
+  tool_keywords:                  # 多目标并列判定：命中 ≥3 个 → complex
+    - "搜索"
+    - "搜索笔记"
+    - "统计"
+    - "回顾"
+    - "创建"
+    - "更新"
+    - "推荐"
+    - "标记"
+  condition_patterns:             # 条件分支模式：命中 → complex
+    - "如果.*否则"
+    - "要么.*要么"
+    - "根据.*决定"
+  tool_intent_keywords:           # 工具意图词表（短消息判定用）
+    - "搜索"
+    - "统计"
+    - "回顾"
+    - "创建"
+    - "更新"
+    - "推荐"
+    - "标记"
+    - "时间"
+  short_msg_length: 50            # 短消息阈值（字符数，无工具意图时判 simple）
   # L2 LLM 层
   llm_enabled: true               # 是否启用 LLM 精判
   llm_confidence: 0.8             # LLM 判定置信度
@@ -69,6 +93,11 @@ token_budget:
   current_input_estimate: 300
   # 安全余量
   safety_margin: 1000
+  # 多模态（图片/视频）预算
+  # 单条消息图片预留（当前消息优先保证）
+  image_tokens_per_msg: 3000
+  # 历史回放单条消息最多保留的图片数，超出以 "[图片×N]" 占位
+  max_history_images: 4
 
 # 工具按需加载配置
 tool_groups:
@@ -167,6 +196,11 @@ tool_routing:
       - "发到"
       - "转发"
       - "email"
+
+# 安全配置（P2-3 安全护栏）
+security:
+  # send_email 每用户每小时发送上限（进程内滑动窗口；多进程部署需换 Redis）
+  email_rate_limit_per_hour: 10
 
 # 记忆压缩配置
 memory_compression:

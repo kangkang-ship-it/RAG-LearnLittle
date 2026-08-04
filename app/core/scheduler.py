@@ -9,6 +9,7 @@
 """
 
 import logging
+import os
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -50,6 +51,29 @@ async def cleanup_expired_notes() -> int:
             raise
 
 
+async def cleanup_orphan_chat_attachments() -> int:
+    """
+    清理孤儿聊天附件（未绑定会话 + 超过 TTL，默认 24h）
+
+    删除文件 + chat_attachments 行，防止磁盘与配额失控。
+    TTL 由环境变量 CHAT_ATTACHMENT_ORPHAN_TTL_HOURS 控制。
+    """
+    from app.db.database import async_session_factory
+    from app.services.chat_attachment_service import ChatAttachmentService
+
+    ttl_hours = int(os.getenv("CHAT_ATTACHMENT_ORPHAN_TTL_HOURS", "24"))
+    async with async_session_factory() as db:
+        try:
+            count = await ChatAttachmentService().cleanup_orphans(db, ttl_hours=ttl_hours)
+            await db.commit()
+            logger.info(f"定时清理孤儿聊天附件完成: 删除 {count} 条")
+            return count
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"定时清理孤儿聊天附件失败: {e}")
+            raise
+
+
 def init_scheduler() -> None:
     """初始化并启动定时任务（仅在非 reload 模式下由 main.py 调用）"""
     scheduler.add_job(
@@ -60,8 +84,16 @@ def init_scheduler() -> None:
         replace_existing=True,
         misfire_grace_time=3600,
     )
+    scheduler.add_job(
+        cleanup_orphan_chat_attachments,
+        trigger=CronTrigger(hour=3, minute=20),
+        id="cleanup_orphan_chat_attachments",
+        name="清理孤儿聊天附件",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
     scheduler.start()
-    logger.info("定时任务调度器已启动（每日 03:00 清理回收站过期笔记）")
+    logger.info("定时任务调度器已启动（03:00 清理回收站过期笔记，03:20 清理孤儿聊天附件）")
 
 
 def shutdown_scheduler() -> None:

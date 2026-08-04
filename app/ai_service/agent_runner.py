@@ -79,6 +79,7 @@ async def execute_agent(
     email_service=None,
     timeout: int = 60,
     override_groups: Optional[List[str]] = None,
+    attachment_content: Optional[List[dict]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     执行 Agent 并返回事件字典流
@@ -97,6 +98,8 @@ async def execute_agent(
         email_service: 邮件发送服务实例（供 send_email 工具使用）
         timeout: 超时秒数
         override_groups: 直接指定工具组，跳过关键词路由（Plan-Execute 步骤使用）
+        attachment_content: 附件多模态 content blocks（图片/视频帧），非空时
+            当前消息以 OpenAI 多模态格式发送（文本 + 图片块）
 
     Yields:
         事件字典（type 字段区分类型）
@@ -128,9 +131,15 @@ async def execute_agent(
         max_iterations=agent_config.get("max_iterations", 5),
     )
 
-    # 4. 构造 Agent 输入（messages 格式）
+    # 4. 构造 Agent 输入（messages 格式，支持多模态 content blocks）
     messages = list(compressed_messages or [])
-    messages.append(HumanMessage(content=user_message))
+    if attachment_content:
+        # 多模态：文本 + 图片/视频帧 blocks（OpenAI 兼容格式）
+        content = [{"type": "text", "text": user_message}]
+        content.extend(attachment_content)
+        messages.append(HumanMessage(content=content))
+    else:
+        messages.append(HumanMessage(content=user_message))
     agent_input = {"messages": messages}
 
     # 5. 流式输出（内含中间件钩子 + 超时保护 + 循环检测）

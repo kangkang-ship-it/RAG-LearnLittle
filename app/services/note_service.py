@@ -190,6 +190,9 @@ class NoteService:
         
         note.updated_at = func.now()
         await db.flush()
+        # 回读数据库生成的 updated_at（func.now() 是 SQL 表达式，flush 后属性待回读；
+        # 不 refresh 的话，后续响应序列化时在 greenlet 外触发 SELECT → MissingGreenlet）
+        await db.refresh(note)
 
         # 同步更新 ChromaDB 向量
         if self.vector_store:
@@ -306,6 +309,8 @@ class NoteService:
         note.deleted_at = None
         note.updated_at = func.now()
         await db.flush()
+        # 回读数据库生成的 updated_at（func.now() 为 SQL 表达式，见 update_note 注释）
+        await db.refresh(note)
 
         # 3. 重建 ChromaDB 向量（与 _sync_to_vector 完全一致）
         if self.vector_store:
@@ -426,6 +431,7 @@ class NoteService:
         note.is_pinned = True
         note.updated_at = func.now()
         await db.flush()
+        await db.refresh(note)  # 回读 updated_at（func.now() 为 SQL 表达式，见 update_note 注释）
         logger.info(f"笔记置顶: note_id={note_id}")
         return note
 
@@ -445,6 +451,7 @@ class NoteService:
         note.is_pinned = False
         note.updated_at = func.now()
         await db.flush()
+        await db.refresh(note)  # 回读 updated_at（func.now() 为 SQL 表达式，见 update_note 注释）
         logger.info(f"笔记取消置顶: note_id={note_id}")
         return note
 
@@ -467,6 +474,7 @@ class NoteService:
         note.category = category
         note.updated_at = func.now()
         await db.flush()
+        await db.refresh(note)  # 回读 updated_at（func.now() 为 SQL 表达式，见 update_note 注释）
         logger.info(f"笔记移动分类: note_id={note_id}, category={category}")
         return note
 

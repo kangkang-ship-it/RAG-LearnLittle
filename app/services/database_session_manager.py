@@ -173,14 +173,15 @@ class DatabaseSessionManager:
     
     async def add_message(
         self, db: AsyncSession, session_id: str, user_id: str,
-        role: str, content: str, idempotency_key: Optional[str] = None
+        role: str, content: str, idempotency_key: Optional[str] = None,
+        attachments_json: Optional[list] = None
     ) -> ChatMessage:
         """
         添加消息到会话
-        
+
         写入路径：MySQL → Redis
         支持幂等写入（idempotency_key 防重复）
-        
+
         Args:
             db: 数据库会话
             session_id: 会话 ID
@@ -188,13 +189,14 @@ class DatabaseSessionManager:
             role: 消息角色（user / assistant）
             content: 消息内容
             idempotency_key: 幂等键
-            
+            attachments_json: 附件元数据列表（仅用户消息携带）
+
         Returns:
             创建的消息对象
         """
         # 验证会话存在且属于当前用户
         await self.get_session(db, session_id, user_id)
-        
+
         # 幂等检查
         if idempotency_key:
             existing = await db.execute(
@@ -205,7 +207,7 @@ class DatabaseSessionManager:
                     code=ErrorCode.IDEMPOTENCY_DUPLICATE,
                     http_status=409
                 )
-        
+
         # 写入 MySQL（显式设置 created_at，避免 flush 后访问触发 MissingGreenlet）
         now = datetime.utcnow()
         message = ChatMessage(
@@ -213,6 +215,7 @@ class DatabaseSessionManager:
             role=role,
             content=content,
             idempotency_key=idempotency_key,
+            attachments_json=attachments_json,
             created_at=now,
         )
         db.add(message)
@@ -270,6 +273,7 @@ class DatabaseSessionManager:
                             session_id=session_id,
                             role=msg_data.get("role", ""),
                             content=msg_data.get("content", ""),
+                            attachments_json=msg_data.get("attachments_json"),
                         )
                         if msg_data.get("created_at"):
                             msg.created_at = datetime.fromisoformat(msg_data["created_at"])
@@ -344,6 +348,7 @@ class DatabaseSessionManager:
                     "role": m.role,
                     "content": m.content,
                     "created_at": m.created_at.isoformat() if m.created_at else None,
+                    "attachments_json": m.attachments_json,
                 }
                 for m in reversed(messages)
             ]
@@ -370,6 +375,7 @@ class DatabaseSessionManager:
                 "role": message.role,
                 "content": message.content,
                 "created_at": message.created_at.isoformat() if message.created_at else None,
+                "attachments_json": message.attachments_json,
             }, ensure_ascii=False)
             
             # LPUSH 添加到列表头部（最新在前）

@@ -46,10 +46,22 @@ class QueryClassifier:
         self.simple_patterns: List[str] = config.get("rule_simple_patterns", [])
         self.complex_min_length: int = config.get("rule_complex_min_length", 200)
         self.llm_enabled: bool = config.get("llm_enabled", True)
+        # L1 补充规则（迁移自 _rule_classify 的硬编码，默认值与原代码一致）
+        self.tool_keywords: List[str] = config.get(
+            "tool_keywords", ["搜索", "搜索笔记", "统计", "回顾", "创建", "更新", "推荐", "标记"]
+        )
+        self.condition_patterns: List[str] = config.get(
+            "condition_patterns", ["如果.*否则", "要么.*要么", "根据.*决定"]
+        )
+        self.tool_intent_keywords: List[str] = config.get(
+            "tool_intent_keywords", ["搜索", "统计", "回顾", "创建", "更新", "推荐", "标记", "时间"]
+        )
+        self.short_msg_length: int = config.get("short_msg_length", 50)
 
         # 预编译正则
         self._complex_res = [re.compile(p) for p in self.complex_patterns]
         self._simple_res = [re.compile(p) for p in self.simple_patterns]
+        self._condition_res = [re.compile(p) for p in self.condition_patterns]
 
     async def classify(self, user_message: str) -> ClassificationResult:
         """
@@ -113,8 +125,7 @@ class QueryClassifier:
             )
 
         # 多目标并列（检测 3+ 个工具意图关键词）
-        tool_keywords = ["搜索", "搜索笔记", "统计", "回顾", "创建", "更新", "推荐", "标记"]
-        matched_tools = sum(1 for kw in tool_keywords if kw in msg)
+        matched_tools = sum(1 for kw in self.tool_keywords if kw in msg)
         if matched_tools >= 3:
             return ClassificationResult(
                 "complex", "rule",
@@ -122,12 +133,11 @@ class QueryClassifier:
             )
 
         # 条件分支
-        condition_patterns = [r"如果.*否则", r"要么.*要么", r"根据.*决定"]
-        for p in condition_patterns:
-            if re.search(p, msg):
+        for p in self._condition_res:
+            if p.search(msg):
                 return ClassificationResult(
                     "complex", "rule",
-                    f"条件分支: 匹配 {p}", 1.0
+                    f"条件分支: 匹配 {p.pattern}", 1.0
                 )
 
         # --- 判定为"简单" ---
@@ -141,9 +151,8 @@ class QueryClassifier:
                 )
 
         # 短消息 + 无工具意图
-        tool_intentits = ["搜索", "统计", "回顾", "创建", "更新", "推荐", "标记", "时间"]
-        has_tool_intent = any(kw in msg for kw in tool_intentits)
-        if len(msg) < 50 and not has_tool_intent:
+        has_tool_intent = any(kw in msg for kw in self.tool_intent_keywords)
+        if len(msg) < self.short_msg_length and not has_tool_intent:
             return ClassificationResult(
                 "simple", "rule",
                 f"短消息({len(msg)}字符)无工具意图", 1.0

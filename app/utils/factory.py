@@ -15,6 +15,7 @@ from typing import Optional
 import httpx
 
 from app.core.logger_handler import logger
+from app.core.model_trace import TRACE_CALLBACK
 
 
 # ============================================================
@@ -191,6 +192,7 @@ def create_classifier_model():
             # 思考模式由环境变量 CLASSIFIER_ENABLE_THINKING 控制，默认关闭：
             # qwen3-flash 开启思考会拖到 30s+ 导致 L2 分类超时降级
             extra_body={"enable_thinking": _env_bool("CLASSIFIER_ENABLE_THINKING", False)},
+            callbacks=[TRACE_CALLBACK],  # 模型调用 trace（P0）
         )
     else:
         # Ollama
@@ -203,7 +205,66 @@ def create_classifier_model():
             base_url=base_url,
             timeout=10.0,
             streaming=False,
+            callbacks=[TRACE_CALLBACK],  # 模型调用 trace（P0）
         )
+
+
+def create_vision_model():
+    """
+    创建视觉模型实例（图片/视频理解，与聊天主模型分离）
+
+    根据 MODEL_PROVIDER 环境变量自动选择：
+    - dashscope → ChatOpenAI（VISION_MODEL，兼容端点，OpenAI 多模态 image_url/video_url 格式）
+    - ollama    → ChatOllama（OLLAMA_VISION_MODEL，如 qwen3-vl / llava，能力弱、仅支持图片）
+
+    与主模型解耦的原因：
+    1. 主模型 qwen3.8-max 为文本模型，不保证多模态
+    2. 视觉模型按图/分辨率计费，独立便于成本控制
+
+    Returns:
+        LangChain ChatModel 实例
+
+    Raises:
+        ValueError: DashScope 模式缺少 API Key 或 VISION_MODEL 未配置
+    """
+    provider = get_provider()
+
+    if provider == ModelProvider.DASHSCOPE:
+        from langchain_openai import ChatOpenAI
+
+        model_name = os.getenv("VISION_MODEL", "").strip()
+        api_key = os.getenv("DASHSCOPE_API_KEY", "")
+        if not model_name:
+            raise ValueError("VISION_MODEL 未配置，请在 .env 中设置（如 qwen-vl-max）")
+        if not api_key:
+            raise ValueError("DASHSCOPE_API_KEY 未配置，请在 .env 中设置")
+
+        logger.info(f"创建视觉模型: {model_name} @ {DASHSCOPE_BASE_URL} (DashScope)")
+        return ChatOpenAI(
+            model=model_name,
+            api_key=api_key,
+            base_url=DASHSCOPE_BASE_URL,
+            streaming=True,
+            http_async_client=get_shared_async_client(),  # 复用连接池
+            request_timeout=120.0,
+            stream_usage=True,  # 流式响应也统计 token（供 model_trace 使用，P0）
+            callbacks=[TRACE_CALLBACK],  # 模型调用 trace（P0）
+        )
+
+    # Ollama
+    from langchain_ollama import ChatOllama
+
+    model_name = os.getenv("OLLAMA_VISION_MODEL", "").strip() or "qwen3-vl"
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    timeout = int(os.getenv("OLLAMA_TIMEOUT", "30"))
+    logger.info(f"创建视觉模型: {model_name} @ {base_url} (Ollama)")
+    return ChatOllama(
+        model=model_name,
+        base_url=base_url,
+        timeout=timeout,
+        streaming=True,
+        callbacks=[TRACE_CALLBACK],  # 模型调用 trace（P0）
+    )
 
 
 def create_plan_model():
@@ -237,6 +298,7 @@ def create_plan_model():
             # qwen3-flash 开启思考在规划任务上耗时 30s+（实测 46.7s 超时），
             # 会耗尽 plan_timeout 预算；关闭后实测 2.4s 返回完整 JSON 计划。
             extra_body={"enable_thinking": _env_bool("PLAN_ENABLE_THINKING", False)},
+            callbacks=[TRACE_CALLBACK],  # 模型调用 trace（P0）
         )
     else:
         model_name = os.getenv("PLAN_MODEL", "qwen3:0.6b")
@@ -248,6 +310,7 @@ def create_plan_model():
             base_url=base_url,
             timeout=15.0,
             streaming=False,
+            callbacks=[TRACE_CALLBACK],  # 模型调用 trace（P0）
         )
 
 
@@ -293,8 +356,10 @@ def _create_dashscope_chat_model(enable_thinking: bool = False):
         streaming=True,
         http_async_client=get_shared_async_client(),  # 复用连接池
         request_timeout=120.0,                         # 超时保护
+        stream_usage=True,  # 流式响应也统计 token（供 model_trace 使用，P0）
         # 思考模式：由调用方（前端"深度思考"开关）决定
         extra_body={"enable_thinking": enable_thinking},
+        callbacks=[TRACE_CALLBACK],  # 模型调用 trace（P0）
     )
 
 
@@ -358,6 +423,7 @@ def _create_ollama_chat_model():
         base_url=base_url,
         timeout=timeout,
         streaming=True,
+        callbacks=[TRACE_CALLBACK],  # 模型调用 trace（P0）
     )
 
 

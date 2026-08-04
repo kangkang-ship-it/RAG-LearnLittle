@@ -7,15 +7,28 @@
 from datetime import datetime
 from typing import Literal, Optional, List, TypedDict
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class QueryRequest(BaseModel):
-    """Agent 对话请求"""
+    """
+    Agent 对话请求
+
+    ⚠️ Breaking change：message 由必填改为可选（允许仅发附件），
+    但必须同时满足：message 为空时 attachment_ids 非空（由 _require_message_or_attachment 兜底）。
+    """
     session_id: Optional[str] = Field(None, description="会话 ID（为空则创建新会话）")
-    message: str = Field(..., min_length=1, max_length=10000, description="用户消息")
+    message: str = Field("", max_length=10000, description="用户消息（可空，仅发附件时）")
     idempotency_key: Optional[str] = Field(None, description="幂等键（防重复提交）")
     enable_thinking: bool = Field(False, description="是否开启深度思考（思考模式，质量更高但响应更慢）")
+    attachment_ids: List[str] = Field(default_factory=list, max_length=8, description="附件 ID 列表（图片 ≤6 张 + 视频 ≤1 个）")
+
+    @model_validator(mode="after")
+    def _require_message_or_attachment(self):
+        """空消息 + 无附件 → 拒绝（替代原 min_length=1 的兜底）"""
+        if not self.message.strip() and not self.attachment_ids:
+            raise ValueError("message 为空时必须附带 attachment_ids")
+        return self
 
 
 class RAGRequest(BaseModel):
@@ -23,6 +36,31 @@ class RAGRequest(BaseModel):
     query: str = Field(..., min_length=1, description="查询内容")
     top_k: int = Field(3, ge=1, le=10, description="检索文档数量")
     use_hyde: bool = Field(True, description="是否使用 HyDE 技术")
+
+
+class AttachmentMeta(BaseModel):
+    """聊天附件元数据（消息回显，对应 chat_messages.attachments_json）"""
+    file_id: str
+    file_type: Literal["image", "video"]
+    original_name: str
+    file_size: Optional[int] = None
+    mime_type: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    duration_sec: Optional[float] = None
+
+
+class UploadResponse(BaseModel):
+    """聊天附件上传响应"""
+    file_id: str
+    file_type: Literal["image", "video"]
+    mime_type: str
+    original_name: str
+    file_size: int
+    width: Optional[int] = None
+    height: Optional[int] = None
+    duration_sec: Optional[float] = None
+    created_at: datetime
 
 
 class ChatMessageResponse(BaseModel):
@@ -33,7 +71,8 @@ class ChatMessageResponse(BaseModel):
     content: str
     token_count: Optional[int] = 0
     created_at: datetime
-    
+    attachments: Optional[List[AttachmentMeta]] = None
+
     model_config = {"from_attributes": True}
 
 

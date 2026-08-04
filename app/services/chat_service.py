@@ -62,47 +62,63 @@ class ChatService:
 
     async def save_message_with_commit(
         self, session_id: str, user_id: str, role: str, content: str,
-        idempotency_key: Optional[str] = None
-    ) -> None:
+        idempotency_key: Optional[str] = None,
+        attachments_json: Optional[list] = None
+    ) -> Optional[int]:
         """
         使用独立 session 保存消息并 commit（用于异步后台任务）
-        
+
         不依赖请求级 db session，使用 async_session_factory() 创建独立会话，
         确保消息持久化到 MySQL + Redis 缓存。
-        
+
         Args:
             session_id: 会话 ID
             user_id: 用户 ID
             role: 消息角色
             content: 消息内容
             idempotency_key: 幂等键
+            attachments_json: 附件元数据列表（仅用户消息携带）
+
+        Returns:
+            消息 ID（保存失败返回 None；供附件绑定 message_id 使用）
         """
         try:
             async with async_session_factory() as db:
-                await self.session_manager.add_message(
-                    db, session_id, user_id, role, content, idempotency_key
+                message = await self.session_manager.add_message(
+                    db, session_id, user_id, role, content, idempotency_key,
+                    attachments_json=attachments_json,
                 )
                 await db.commit()
                 logger.info(f"消息保存成功: session={session_id[:12]}, role={role}, len={len(content)}")
+                return message.id if message else None
         except Exception as e:
             logger.error(f"保存消息失败: session_id={session_id}, role={role}, error={type(e).__name__}: {e}", exc_info=True)
+            return None
 
     async def generate_and_update_title(
-        self, session_id: str, user_message: str, chat_model=None
+        self, session_id: str, user_message: str, chat_model=None,
+        attachment_names: Optional[list] = None
     ) -> None:
         """
         根据用户消息自动生成/更新会话标题
-        
+
         策略：
         - 新会话（默认标题"新对话"）：直接用 LLM 生成标题
         - 已有标题的会话：检查消息数，前 3 轮内允许更新
-        
+
         Args:
             session_id: 会话 ID
             user_message: 用户最新消息内容
             chat_model: LLM 模型实例
+            attachment_names: 附件文件名列表（消息为空时标题兜底）
         """
         try:
+            # 模型 trace 独立上下文（后台任务，无请求上下文；P0）
+            # contextvar 按 asyncio task 隔离，任务结束自动清理，无需手动 clear
+            from app.core.model_trace import set_trace_context, new_request_id
+            set_trace_context(
+                new_request_id(), user_id="", session_id=session_id, stage="title"
+            )
             async with async_session_factory() as db:
                 # 获取会话
                 result = await db.execute(
@@ -111,29 +127,32 @@ class ChatService:
                 session = result.scalar_one_or_none()
                 if not session:
                     return
-                
+
                 # 统计当前会话消息数
                 msg_count_result = await db.execute(
                     select(ChatMessage).where(ChatMessage.session_id == session_id)
                 )
                 msg_count = len(msg_count_result.scalars().all())
-                
+
                 # 标题已是自定义的（非默认），不再自动更新
                 if session.title != "新对话" and msg_count > 4:
                     return
-                
+
                 # 使用 LLM 生成标题
-                if chat_model:
+                if chat_model and user_message.strip():
                     title = await self._generate_title_with_llm(user_message, chat_model)
+                elif not user_message.strip():
+                    # 仅发附件：标题兜底为 "附件分析（文件名）"
+                    title = f"附件分析（{', '.join(attachment_names[:2])}）" if attachment_names else "新对话"
                 else:
                     # 降级：取用户消息前 20 字符作为标题
                     title = user_message[:20].strip()
-                
+
                 if title:
                     session.title = title
                     await db.commit()
                     logger.info(f"会话标题已更新: session_id={session_id}, title={title}")
-        
+
         except Exception as e:
             logger.warning(f"更新会话标题失败: session_id={session_id}, error={e}")
 

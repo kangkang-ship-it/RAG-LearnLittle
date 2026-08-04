@@ -63,6 +63,10 @@ export const endpoints = {
     messages: (sessionId: string) => `${API_PREFIX}/chat/${sessionId}/messages`,
     /** PUT 修改会话标题 */
     sessionTitle: (sessionId: string) => `${API_PREFIX}/chat/${sessionId}/title`,
+    /** POST 上传聊天附件（图片/视频） */
+    fileUpload: `${API_PREFIX}/chat/files`,
+    /** GET/DELETE 附件详情（预览/删除；回显时拼 ?token=） */
+    fileDetail: (fileId: string) => `${API_PREFIX}/chat/files/${fileId}`,
   },
 
   // ========== 知识库 ==========

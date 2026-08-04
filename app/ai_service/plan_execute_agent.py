@@ -51,14 +51,19 @@ async def _generate_plan(
     plan_model,
     user_message: str,
     system_prompt: str,
+    attachment_names: Optional[List[str]] = None,
 ) -> ExecutionPlan:
     """
     使用轻量模型生成执行计划
+
+    plan_model 为文本模型（无多模态能力），附件只以摘要文本注入，
+    使模型感知附件存在、能制定正确计划（设计方案 §6.4）。
 
     Args:
         plan_model: 轻量 Chat 模型
         user_message: 用户消息
         system_prompt: 系统提示词（含 RAG 上下文）
+        attachment_names: 附件文件名列表（无多模态能力的 plan_model 感知附件）
 
     Returns:
         ExecutionPlan 实例
@@ -71,6 +76,14 @@ async def _generate_plan(
     prompt_template = load_prompt("plan_generation")
     prompt = prompt_template.replace("{current_time}", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     prompt = prompt.replace("{user_message}", user_message[:1000])
+
+    # 注入附件摘要（plan_model 无法看图，但需知道附件存在以制定正确计划）
+    if attachment_names:
+        prompt += (
+            f"\n用户本次请求附带了 {len(attachment_names)} 个附件："
+            f"{', '.join(attachment_names[:5])}。"
+            "请将这些附件作为任务的一部分制定计划（附件内容将由执行阶段的多模态模型处理）。"
+        )
 
     config = get_plan_execute_config()
     plan_timeout = config.get("plan_timeout", 10)
@@ -207,12 +220,16 @@ async def _execute_step(
     email_service,
     step_timeout: int,
     previous_results: Dict[int, str],
+    attachment_content: Optional[List[dict]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     执行单个计划步骤
 
     如果步骤需要工具调用 → 创建专用 ReAct Agent（prompt 限定在当前步骤）
     如果不需要工具 → 直接 LLM 流式生成
+
+    Args:
+        attachment_content: 附件多模态 content blocks（透传给执行 Agent / 无工具 LLM 路径）
     """
     yield {"type": "plan_step_start", "step": step.step, "action": step.action}
 
@@ -251,6 +268,7 @@ async def _execute_step(
                 email_service=email_service,
                 timeout=step_timeout,
                 override_groups=step_tool_groups,
+                attachment_content=attachment_content,
             ):
                 event_type = event.get("type", "")
                 if event_type == "response":
@@ -272,9 +290,17 @@ async def _execute_step(
         # 不需要工具 → 直接 LLM 流式生成（替代原来的 ainvoke 一次性输出）
         try:
             messages = list(compressed_messages or [])
-            messages.append(HumanMessage(
-                content=f"{user_message}\n\n请完成以下步骤：{step.action}"
-            ))
+            if attachment_content:
+                content = [{
+                    "type": "text",
+                    "text": f"{user_message}\n\n请完成以下步骤：{step.action}",
+                }]
+                content.extend(attachment_content)
+                messages.append(HumanMessage(content=content))
+            else:
+                messages.append(HumanMessage(
+                    content=f"{user_message}\n\n请完成以下步骤：{step.action}"
+                ))
 
             accumulated = ""
             async with asyncio.timeout(step_timeout):
@@ -308,6 +334,7 @@ async def _execute_batch(
     email_service,
     config: dict,
     previous_results: Dict[int, str],
+    attachment_content: Optional[List[dict]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     执行一个批次（批次内步骤无依赖，可并行）
@@ -330,6 +357,7 @@ async def _execute_batch(
                     step, chat_model, user_id, user_message, system_prompt,
                     compressed_messages, db_session_factory, note_service,
                     review_service, email_service, step_timeout, previous_results,
+                    attachment_content=attachment_content,
                 ):
                     await queue.put(event)
             except Exception as e:
@@ -361,6 +389,7 @@ async def _execute_batch(
                 step, chat_model, user_id, user_message, system_prompt,
                 compressed_messages, db_session_factory, note_service,
                 review_service, email_service, step_timeout, previous_results,
+                attachment_content=attachment_content,
             ):
                 yield event
             previous_results[step.step] = step.result
@@ -438,6 +467,8 @@ async def execute_plan_agent(
     review_service=None,
     email_service=None,
     timeout: int = 120,
+    attachment_content: Optional[List[dict]] = None,
+    attachment_names: Optional[List[str]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     Plan-and-Execute Agent 执行器
@@ -456,6 +487,8 @@ async def execute_plan_agent(
         review_service: 回顾服务实例
         email_service: 邮件发送服务实例（供 send_email 工具使用）
         timeout: 总超时秒数
+        attachment_content: 附件多模态 content blocks（执行阶段透传）
+        attachment_names: 附件文件名列表（plan_model 无多模态能力，以摘要注入）
 
     Yields:
         SSE 事件字典
@@ -463,11 +496,17 @@ async def execute_plan_agent(
     config = get_plan_execute_config()
     total_timeout = config.get("total_timeout", timeout)
 
+    # 仅发附件（空消息）时提供兜底文本，避免 plan/synthesize 提示词空洞
+    effective_message = user_message.strip() or "请分析我发送的附件"
+
     try:
         async with asyncio.timeout(total_timeout):
             # ===== Phase 1: Plan =====
             try:
-                plan = await _generate_plan(plan_model, user_message, system_prompt)
+                plan = await _generate_plan(
+                    plan_model, effective_message, system_prompt,
+                    attachment_names=attachment_names,
+                )
             except (ValueError, Exception) as e:
                 # Plan 生成失败 → 降级为 ReAct
                 logger.warning(f"Plan 生成失败，降级为 ReAct: {e}")
@@ -501,7 +540,7 @@ async def execute_plan_agent(
                     batch=batch,
                     chat_model=chat_model,
                     user_id=user_id,
-                    user_message=user_message,
+                    user_message=effective_message,
                     system_prompt=system_prompt,
                     compressed_messages=compressed_messages,   # 压缩后历史消息
                     db_session_factory=db_session_factory,     # 数据库会话工厂
@@ -510,6 +549,7 @@ async def execute_plan_agent(
                     email_service=email_service,               # 邮件发送服务实例
                     config=config,                             # 配置字典
                     previous_results=previous_results,         # 已完成步骤结果
+                    attachment_content=attachment_content,     # 附件多模态 blocks
                 ):
                     yield event
                     if event.get("type") == "plan_step_end":
@@ -520,7 +560,7 @@ async def execute_plan_agent(
                 chat_model=chat_model,
                 plan=plan,
                 results=previous_results,
-                user_message=user_message,
+                user_message=effective_message,
                 system_prompt=system_prompt,
                 config=config,
             ):

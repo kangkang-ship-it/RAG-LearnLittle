@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.logger_handler import logger
 from app.core.failed_response_register import register_exception_handlers
+from app.core.model_trace import start_trace_bus, stop_trace_bus
 from app.db.database import init_db, close_db
 from app.db.redis_client import init_redis, close_redis
 
@@ -100,11 +101,11 @@ class BackgroundInitManager:
             logger.error(f"后台初始化失败: {e}")
     
     async def _init_models(self):
-        """初始化 AI 模型（Chat + Embedding + Classifier + Plan）"""
+        """初始化 AI 模型（Chat + Embedding + Vision + Classifier + Plan）"""
         try:
             from app.utils.factory import (
                 create_chat_model, create_embed_model,
-                create_classifier_model, create_plan_model,
+                create_classifier_model, create_plan_model, create_vision_model,
             )
             self.chat_model = create_chat_model(enable_thinking=False)  # 默认关闭思考
             try:
@@ -115,6 +116,13 @@ class BackgroundInitManager:
                 logger.warning(f"深度思考模型初始化失败: {e}")
                 self.chat_model_thinking = None
             self.embed_model = create_embed_model()
+            # 视觉模型（图片/视频理解），失败优雅降级：附件仍可上传/展示，但 AI 无法理解
+            try:
+                self.vision_model = create_vision_model()
+                logger.info("视觉模型初始化成功")
+            except Exception as e:
+                logger.warning(f"视觉模型初始化失败，图片/视频理解不可用: {e}")
+                self.vision_model = None
             # 分类器和 Plan 模型（轻量级，失败不影响核心功能）
             try:
                 self.classifier_model = create_classifier_model()
@@ -215,18 +223,23 @@ async def lifespan(app: FastAPI):
     
     # 1. 初始化数据库
     await init_db()
-    
-    # 2. 连接 Redis
+
+    # 2. 启动 model_trace 输出总线（成本账单落库 worker）+ 种子模型定价
+    start_trace_bus()
+    from app.services.usage_service import seed_model_pricing
+    await seed_model_pricing()
+
+    # 3. 连接 Redis
     redis = await init_redis()
     app.state.redis = redis
-    
-    # 3. 创建测试用户（本地开发用）
+
+    # 4. 创建测试用户（本地开发用）
     await _create_test_user()
-    
-    # 4. 后台异步初始化重型资源
+
+    # 5. 后台异步初始化重型资源
     asyncio.create_task(init_manager.run())
 
-    # 5. 启动定时任务（reload 模式跳过，避免 uvicorn fork 子进程导致重复执行）
+    # 6. 启动定时任务（reload 模式跳过，避免 uvicorn fork 子进程导致重复执行）
     reload = os.getenv("UVICORN_RELOAD", "true").lower() not in ("false", "0", "no")
     if not reload:
         from app.core.scheduler import init_scheduler
@@ -248,6 +261,8 @@ async def lifespan(app: FastAPI):
     # 关闭共享 httpx 连接池
     from app.utils.factory import close_shared_http_client
     await close_shared_http_client()
+    # 排空 model_trace DB 队列（worker 停止）
+    await stop_trace_bus()
     await close_redis()
     await close_db()
     logger.info("应用已关闭")
@@ -338,6 +353,7 @@ from app.routers import (
     knowledge_router,
     review_router,
     note_template_router,
+    usage,
 )
 
 # 健康检查（不需要认证）
@@ -352,6 +368,7 @@ app.include_router(note_router.router, prefix=API_PREFIX, tags=["Note"])
 app.include_router(knowledge_router.router, prefix=API_PREFIX, tags=["Knowledge"])
 app.include_router(review_router.router, prefix=API_PREFIX, tags=["Review"])
 app.include_router(note_template_router.router, prefix=API_PREFIX, tags=["Note Template"])
+app.include_router(usage.router, prefix=API_PREFIX, tags=["Usage"])
 
 # 静态文件服务（头像访问）
 # 确保头像存储目录存在

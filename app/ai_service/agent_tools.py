@@ -16,12 +16,42 @@ Agent 工具集
 """
 
 import re
+import time
 from datetime import datetime
 from typing import Optional, List
 
 from langchain_core.tools import tool
 
 from app.core.logger_handler import logger
+
+
+# ============================================================
+# send_email 安全校验与限流（P2-3）
+# ============================================================
+
+_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+_MAX_EMAIL_ADDR_CHARS = 254
+_MAX_EMAIL_SUBJECT_CHARS = 200
+_MAX_EMAIL_BODY_CHARS = 50000
+_EMAIL_FORMATS = ("md", "pdf", "text")
+
+# 每用户发送记录（user_id -> [发送时刻时间戳]），进程内滑动窗口；
+# 多进程/多机部署时需改用 Redis 等共享存储
+_email_send_history: dict = {}
+
+
+def _email_rate_allowed(user_id: str, limit: int, window_sec: int = 3600) -> bool:
+    """检查每用户每小时发送上限（仅检查不计数，发送成功后再记录）"""
+    now = time.time()
+    history = _email_send_history.setdefault(user_id, [])
+    while history and history[0] <= now - window_sec:
+        history.pop(0)
+    return len(history) < limit
+
+
+def _email_send_record(user_id: str) -> None:
+    """记录一次成功发送（供限流窗口使用）"""
+    _email_send_history.setdefault(user_id, []).append(time.time())
 
 
 def create_agent_tools(
@@ -314,6 +344,28 @@ def create_agent_tools(
             body: 邮件正文（Markdown 格式，建议包含笔记标题、分类/标签元信息和完整内容）
             format: 附件格式："md"（Markdown 附件，默认）/ "pdf"（PDF 附件）/ "text"（仅正文，无附件）
         """
+        # ===== 安全校验（P2-3）=====
+        to = (to or "").strip()
+        if not _EMAIL_RE.fullmatch(to):
+            return "邮件发送失败：收件人邮箱地址格式不正确"
+        if len(to) > _MAX_EMAIL_ADDR_CHARS:
+            return "邮件发送失败：收件人邮箱地址过长"
+        subject = (subject or "").strip()
+        body = body or ""
+        if not subject:
+            return "邮件发送失败：邮件主题不能为空"
+        if len(subject) > _MAX_EMAIL_SUBJECT_CHARS:
+            return f"邮件发送失败：邮件主题过长（最多 {_MAX_EMAIL_SUBJECT_CHARS} 字符）"
+        if len(body) > _MAX_EMAIL_BODY_CHARS:
+            return f"邮件发送失败：邮件正文过长（最多 {_MAX_EMAIL_BODY_CHARS} 字符）"
+        if format not in _EMAIL_FORMATS:
+            return "邮件发送失败：format 仅支持 md / pdf / text"
+        # 每用户限流（发送成功后才计数）
+        from app.utils.config import get_security_config
+        rate_limit_per_hour = get_security_config().get("email_rate_limit_per_hour", 10)
+        if not _email_rate_allowed(user_id, rate_limit_per_hour):
+            return f"邮件发送过于频繁，请稍后再试（每小时最多发送 {rate_limit_per_hour} 封）"
+
         if not email_service:
             return "邮件服务未初始化，请联系管理员"
         try:
@@ -338,6 +390,7 @@ def create_agent_tools(
                 }]
 
             await email_service.send_email(to, subject, body, attachments=attachments)
+            _email_send_record(user_id)  # 发送成功后计数（P2-3 限流）
             fmt_label = {"md": "Markdown", "pdf": "PDF", "text": "文本"}.get(format, "Markdown")
             return f"笔记已成功以{fmt_label}形式发送至 {to}"
         except Exception as e:

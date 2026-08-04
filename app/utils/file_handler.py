@@ -6,6 +6,7 @@
 
 import hashlib
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -35,6 +36,122 @@ FORBIDDEN_EXTENSIONS = {
     ".dll", ".so", ".dylib",                          # 动态链接库
     ".bin",                                           # 二进制文件
 }
+
+# ========== 聊天附件（图片/视频）支持类型 ==========
+
+# 支持的扩展名集合
+CHAT_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+CHAT_VIDEO_EXTENSIONS = {".mp4", ".webm", ".mov", ".avi"}
+
+# 扩展名 → (file_type, mime_type, magic bytes 签名组)
+# 签名组格式：[[(offset, bytes), ...], ...]，命中任意一组即通过（如 GIF87a/GIF89a 两种）
+# 所有签名均为"前缀匹配"：content[offset:offset+len(magic)] == magic
+_CHAT_EXT_SPECS = {
+    ".png":  ("image", "image/png",           [[(0, b"\x89PNG\r\n\x1a\n")]]),
+    ".jpg":  ("image", "image/jpeg",          [[(0, b"\xff\xd8\xff")]]),
+    ".jpeg": ("image", "image/jpeg",          [[(0, b"\xff\xd8\xff")]]),
+    ".webp": ("image", "image/webp",          [[(0, b"RIFF"), (8, b"WEBP")]]),
+    ".gif":  ("image", "image/gif",           [[(0, b"GIF87a")], [(0, b"GIF89a")]]),
+    ".mp4":  ("video", "video/mp4",           [[(4, b"ftyp")]]),
+    ".webm": ("video", "video/webm",          [[(0, b"\x1a\x45\xdf\xa3")]]),
+    ".mov":  ("video", "video/quicktime",     [[(4, b"ftyp")]]),
+    ".avi":  ("video", "video/x-msvideo",     [[(0, b"RIFF"), (8, b"AVI ")]]),
+}
+
+
+@dataclass
+class AttachmentInfo:
+    """聊天附件校验结果"""
+    file_type: str   # image / video
+    mime_type: str   # 如 image/png
+    ext: str         # 标准化扩展名（含点，如 .png）
+
+
+def _match_magic(content: bytes, signature_groups: list) -> bool:
+    """
+    校验文件内容 magic bytes 签名
+
+    每组签名内的所有 (offset, bytes) 必须全部命中；多组之间命中任意一组即可。
+
+    Args:
+        content: 文件内容字节
+        signature_groups: 签名组列表
+
+    Returns:
+        是否匹配
+    """
+    if not content:
+        return False
+    for group in signature_groups:
+        if all(
+            content[offset:offset + len(magic)] == magic
+            for offset, magic in group
+        ):
+            return True
+    return False
+
+
+def validate_chat_attachment(
+    filename: str,
+    file_size: int,
+    content: bytes,
+    max_size_mb: int = 10,
+) -> AttachmentInfo:
+    """
+    校验聊天附件（图片/视频）是否合规（纵深防御：扩展名白名单 + magic bytes 双重校验）
+
+    检查项：
+    1. 文件大小不超过限制
+    2. 扩展名在图片/视频白名单中（png/jpg/jpeg/webp/gif + mp4/webm/mov/avi）
+    3. 文件内容 magic bytes 与扩展名声称的类型一致（杜绝伪装扩展名）
+
+    注意：独立于 validate_upload_file（知识库 PDF/MD/TXT）与 validate_avatar_file，
+    不复用、不修改现有函数，避免影响知识库上传路径。
+
+    Args:
+        filename: 原始文件名
+        file_size: 文件大小（字节）
+        content: 文件内容字节（用于 magic bytes 校验）
+        max_size_mb: 最大文件大小（MB）
+
+    Returns:
+        AttachmentInfo 校验结果
+
+    Raises:
+        BusinessError: 文件校验失败
+    """
+    max_size_bytes = max_size_mb * 1024 * 1024
+    if file_size > max_size_bytes:
+        raise BusinessError(
+            code=ErrorCode.FILE_TOO_LARGE,
+            detail=f"文件大小 {file_size / 1024 / 1024:.1f}MB 超过限制 {max_size_mb}MB"
+        )
+
+    ext = Path(filename).suffix.lower()
+
+    if ext in FORBIDDEN_EXTENSIONS:
+        raise BusinessError(
+            code=ErrorCode.UNSUPPORTED_FILE_TYPE,
+            detail=f"禁止上传 {ext} 类型的文件"
+        )
+
+    spec = _CHAT_EXT_SPECS.get(ext)
+    if spec is None:
+        raise BusinessError(
+            code=ErrorCode.UNSUPPORTED_FILE_TYPE,
+            detail=f"不支持的文件类型: {ext}，仅支持图片（PNG/JPG/WebP/GIF）和视频（MP4/WebM/MOV/AVI）"
+        )
+
+    file_type, mime_type, signature_groups = spec
+
+    # magic bytes 校验（内容签名与扩展名一致才接受）
+    if not _match_magic(content, signature_groups):
+        raise BusinessError(
+            code=ErrorCode.UNSUPPORTED_FILE_TYPE,
+            detail=f"文件内容与扩展名 {ext} 不符，已拒绝上传"
+        )
+
+    return AttachmentInfo(file_type=file_type, mime_type=mime_type, ext=ext)
 
 
 def calculate_md5(file_path: str) -> str:

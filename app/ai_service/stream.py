@@ -8,11 +8,24 @@ yield 原始 dict，由调用方负责 SSE 格式化。
 """
 
 import asyncio
+import json
 import time
 from typing import AsyncGenerator, Dict, Any, Optional
 
 from app.ai_service.agent_middleware import default_middleware
 from app.core.logger_handler import logger
+
+
+def _safe_str(value: Any, max_len: int = 500) -> str:
+    """事件 payload 转字符串（dict 序列化 + 截断），供审计/钩子上下文使用"""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        try:
+            value = json.dumps(value, ensure_ascii=False, default=str)
+        except Exception:
+            value = str(value)
+    return value[:max_len]
 
 
 async def run_agent_stream(
@@ -88,7 +101,11 @@ async def run_agent_stream(
                         return
                     tool_start_times[tool_name] = time.time()
                     logger.debug(f"工具调用开始: {tool_name} (连续第{consecutive_tool_calls}次)")
-                    await mw.trigger("before_tool", {"tool_name": tool_name})
+                    await mw.trigger("before_tool", {
+                        "tool_name": tool_name,
+                        # 工具入参（截断，供工具审计 P2-3）
+                        "input": _safe_str(event["data"].get("input")),
+                    })
                     yield {"type": "tool_start", "name": tool_name}
 
                 # ---- 工具调用完成 ----
@@ -103,8 +120,33 @@ async def run_agent_stream(
                     await mw.trigger("after_tool", {
                         "tool_name": tool_name,
                         "duration_ms": duration,
+                        # 工具结果（截断，供工具审计 P2-3）
+                        "output": _safe_str(event["data"].get("output")),
+                        "success": True,
                     })
                     yield {"type": "tool_end", "name": tool_name, "duration_ms": duration}
+
+                # ---- 工具调用失败 ----
+                elif event_type == "on_tool_error":
+                    tool_name = event.get("name", "unknown")
+                    duration = 0
+                    if tool_name in tool_start_times:
+                        duration = round(
+                            (time.time() - tool_start_times.pop(tool_name)) * 1000
+                        )
+                    logger.warning(f"工具调用失败: {tool_name} ({duration}ms)")
+                    await mw.trigger("after_tool", {
+                        "tool_name": tool_name,
+                        "duration_ms": duration,
+                        "output": _safe_str(event["data"].get("error")),
+                        "success": False,
+                    })
+                    yield {
+                        "type": "tool_end",
+                        "name": tool_name,
+                        "duration_ms": duration,
+                        "error": True,
+                    }
 
     except asyncio.TimeoutError:
         logger.warning(f"Agent 响应超时 (timeout={timeout}s)")

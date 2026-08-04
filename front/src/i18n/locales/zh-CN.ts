@@ -61,6 +61,14 @@ const zh = {
   'chat.send': '发送',
   'chat.thinking': '思考中...',
   'chat.stop': '停止生成',
+  'chat.attachmentUpload': '上传图片/视频',
+  'chat.attachmentUploading': '附件正在上传，请稍候再发送',
+  'chat.attachmentFailed': '有附件上传失败，请移除后重试',
+  'chat.attachmentLimitImage': '单条消息最多上传 6 张图片',
+  'chat.attachmentLimitVideo': '单条消息最多上传 1 个视频',
+  'chat.attachmentTypeError': '不支持的文件类型（仅支持图片/视频）',
+  'chat.attachmentTooLarge': '文件超过大小限制',
+  'chat.attachmentRemove': '移除附件',
 
   // 知识库
   'knowledge.upload': '上传文档',

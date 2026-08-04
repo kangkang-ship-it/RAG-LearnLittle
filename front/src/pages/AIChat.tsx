@@ -11,16 +11,26 @@
 import { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Send, Square, Plus, User, Bot, FileText, X, Search, Brain } from 'lucide-react';
+import { Send, Square, Plus, User, Bot, FileText, X, Search, Brain, Paperclip } from 'lucide-react';
 import { useSSE } from '../hooks/useSSE';
 import { useSessionStore } from '../stores/useSessionStore';
 import { useUserStore } from '../stores/useUserStore';
 import { sessionsApi } from '../api/sessions';
 import { notesApi } from '../api/notes';
 import { endpoints } from '../api/endpoints';
-import type { ChatMessage, Note } from '../types/api';
+import { uploadChatFile, deleteChatFile } from '../api/chat';
+import type { ChatMessage, Note, AttachmentMeta } from '../types/api';
 import PlanProgressCard from '../components/chat/PlanProgressCard';
 import type { PlanStepData } from '../components/chat/PlanProgressCard';
+import AttachmentBar from '../components/chat/AttachmentBar';
+import type { PendingAttachment } from '../components/chat/AttachmentBar';
+import AttachmentViewer from '../components/chat/AttachmentViewer';
+
+// 附件限制（与后端 .env 配置保持一致）
+const MAX_IMAGES_PER_MSG = 6;
+const MAX_VIDEOS_PER_MSG = 1;
+const MAX_IMAGE_MB = 10;
+const MAX_VIDEO_MB = 50;
 
 export default function AIChat() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -43,6 +53,10 @@ export default function AIChat() {
   const [noteSearch, setNoteSearch] = useState('');
   const [loadingNotes, setLoadingNotes] = useState(false);
   const notePickerRef = useRef<HTMLDivElement>(null);
+
+  // 附件状态（上传预览条）
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Plan-and-Execute 进度状态
   const [planGoal, setPlanGoal] = useState('');
@@ -165,9 +179,117 @@ export default function AIChat() {
     n.title.toLowerCase().includes(noteSearch.toLowerCase())
   );
 
+  /** 选择文件（前端预校验：类型/大小/数量上限，然后逐个上传） */
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = ''; // 允许重复选择同一文件
+
+    if (files.length === 0) return;
+
+    let imgCount = pendingAttachments.filter((a) => a.fileType === 'image').length;
+    let vidCount = pendingAttachments.filter((a) => a.fileType === 'video').length;
+
+    const newItems: PendingAttachment[] = [];
+    for (const file of files) {
+      const isImage = file.type.startsWith('image/');
+      const isVideo = file.type.startsWith('video/');
+      if (!isImage && !isVideo) {
+        alert(`不支持的文件类型: ${file.name}（仅支持图片/视频）`);
+        continue;
+      }
+      const maxMB = isImage ? MAX_IMAGE_MB : MAX_VIDEO_MB;
+      if (file.size > maxMB * 1024 * 1024) {
+        alert(`${file.name} 超过大小限制 ${maxMB}MB`);
+        continue;
+      }
+      if (isImage && imgCount >= MAX_IMAGES_PER_MSG) {
+        alert(`单条消息最多上传 ${MAX_IMAGES_PER_MSG} 张图片`);
+        break;
+      }
+      if (isVideo && vidCount >= MAX_VIDEOS_PER_MSG) {
+        alert(`单条消息最多上传 ${MAX_VIDEOS_PER_MSG} 个视频`);
+        continue;
+      }
+
+      const att: PendingAttachment = {
+        localId: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        file,
+        fileType: isImage ? 'image' : 'video',
+        name: file.name,
+        previewUrl: URL.createObjectURL(file), // 本地预览（objectURL）
+        status: 'uploading',
+        progress: 0,
+      };
+      newItems.push(att);
+      if (isImage) imgCount++;
+      else vidCount++;
+    }
+
+    if (newItems.length === 0) return;
+    setPendingAttachments((prev) => [...prev, ...newItems]);
+    newItems.forEach(uploadAttachment);
+  };
+
+  /** 上传单个附件（XHR 带进度，成功后记录 file_id） */
+  const uploadAttachment = (att: PendingAttachment) => {
+    uploadChatFile(att.file, (percent) => {
+      setPendingAttachments((prev) =>
+        prev.map((a) => (a.localId === att.localId ? { ...a, progress: percent } : a))
+      );
+    })
+      .then((resp) => {
+        setPendingAttachments((prev) =>
+          prev.map((a) =>
+            a.localId === att.localId
+              ? {
+                  ...a,
+                  status: 'done',
+                  fileId: resp.file_id,
+                  width: resp.width ?? undefined,
+                  height: resp.height ?? undefined,
+                }
+              : a
+          )
+        );
+      })
+      .catch((err) => {
+        console.error('[AIChat] 附件上传失败:', err);
+        setPendingAttachments((prev) =>
+          prev.map((a) => (a.localId === att.localId ? { ...a, status: 'error' } : a))
+        );
+      });
+  };
+
+  /** 移除附件（已上传的调 DELETE 接口；未发送可删） */
+  const removeAttachment = (localId: string) => {
+    const target = pendingAttachments.find((a) => a.localId === localId);
+    if (!target) return;
+    if (target.previewUrl) URL.revokeObjectURL(target.previewUrl);
+    // 已上传且未随消息发送 → 调删除接口（失败由后端孤儿清理兜底）
+    if (target.fileId) {
+      deleteChatFile(target.fileId).catch((err) =>
+        console.warn('[AIChat] 附件删除失败:', err)
+      );
+    }
+    setPendingAttachments((prev) => prev.filter((a) => a.localId !== localId));
+  };
+
   /** 发送消息 */
   const handleSend = async () => {
-    if (!input.trim() || isStreaming) return;
+    // 附件前置校验：正在上传 / 有失败附件
+    const uploading = pendingAttachments.some((a) => a.status === 'uploading');
+    const failed = pendingAttachments.some((a) => a.status === 'error');
+    const readyAttachments = pendingAttachments.filter((a) => a.status === 'done' && a.fileId);
+    const attachmentIds = readyAttachments.map((a) => a.fileId!);
+    if ((!input.trim() && attachmentIds.length === 0) || isStreaming) return;
+    if (uploading) {
+      alert('附件正在上传，请稍候再发送');
+      return;
+    }
+    if (failed) {
+      alert('有附件上传失败，请移除后重试');
+      return;
+    }
 
     // 构建发送内容：若有引用笔记，将笔记内容作为上下文附加（含 ID 供 Agent 直接更新）
     let messageText = input;
@@ -182,12 +304,22 @@ export default function AIChat() {
       messageText = `${input}\n\n---\n以下是用户引用的笔记内容，请结合这些内容回答：\n${noteContext}\n\n<referenced_notes>\n${noteRefBlock}\n</referenced_notes>`;
     }
 
+    // 乐观用户消息：附带附件元数据（气泡立即渲染，历史回显走后端附件数据）
+    const userAttachments: AttachmentMeta[] = readyAttachments.map((a) => ({
+      file_id: a.fileId!,
+      file_type: a.fileType,
+      original_name: a.name,
+      file_size: a.file.size,
+      width: a.width,
+      height: a.height,
+    }));
     const userMsg: ChatMessage = {
       id: Date.now(),
       session_id: sessionId || '',
       role: 'user',
       content: input, // 气泡中只显示用户原始输入
       created_at: new Date().toISOString(),
+      attachments: userAttachments.length > 0 ? userAttachments : undefined,
     };
     addMessage(userMsg);
     setInput('');
@@ -229,7 +361,12 @@ export default function AIChat() {
     try {
       await start(
         endpoints.chat.query,
-        { session_id: sessionId, message: messageText, enable_thinking: enableThinking },
+        {
+          session_id: sessionId,
+          message: messageText,
+          enable_thinking: enableThinking,
+          attachment_ids: attachmentIds,
+        },
         {
           onThinking: (stage, content) => {
             setThinkingStages((prev) => [...prev, { stage, content }]);
@@ -333,6 +470,11 @@ export default function AIChat() {
         updateLastAssistantMessage(pendingContentRef.current);
         pendingContentRef.current = '';
       }
+      // 清理附件预览条（附件已随消息发出，fileId 由后端管理）
+      pendingAttachments.forEach((a) => {
+        if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+      });
+      setPendingAttachments([]);
     }
   };
 
@@ -412,6 +554,10 @@ export default function AIChat() {
                 </div>
               )}
               <div className="text-sm whitespace-pre-wrap">{msg.content || '...'}</div>
+              {/* 用户消息附件渲染（图片缩略图 / 视频播放器，历史回显同样走这里） */}
+              {msg.role === 'user' && msg.attachments && msg.attachments.length > 0 && (
+                <AttachmentViewer attachments={msg.attachments} />
+              )}
             </div>
             {msg.role === 'user' && (
               <div className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-[var(--color-accent)] overflow-hidden">
@@ -429,6 +575,29 @@ export default function AIChat() {
 
       {/* 输入区 */}
       <div className="relative flex gap-2">
+        {/* 附件上传按钮（📎） */}
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={isStreaming}
+          className={`flex-shrink-0 px-3 py-2.5 rounded-[var(--radius-md)] border transition-colors ${
+            pendingAttachments.length > 0
+              ? 'border-[var(--color-accent)] text-[var(--color-accent)] bg-[var(--color-accent-bg)]'
+              : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-accent-bg)] hover:text-[var(--color-accent)]'
+          } disabled:opacity-50`}
+          title="上传图片/视频"
+        >
+          <Paperclip size={18} />
+        </button>
+        {/* 隐藏的文件选择器（图片/视频，可多选） */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*,video/*"
+          multiple
+          hidden
+          onChange={handleFileSelect}
+        />
+
         {/* 深度思考开关 */}
         <button
           onClick={() => setEnableThinking(!enableThinking)}
@@ -524,13 +693,20 @@ export default function AIChat() {
         ) : (
           <button
             onClick={handleSend}
-            disabled={!input.trim()}
+            disabled={
+              (!input.trim() &&
+                pendingAttachments.filter((a) => a.status === 'done' && a.fileId).length === 0) ||
+              pendingAttachments.some((a) => a.status === 'uploading')
+            }
             className="px-4 py-2.5 rounded-[var(--radius-md)] bg-[var(--color-accent)] text-white hover:opacity-90 disabled:opacity-50"
           >
             <Send size={18} />
           </button>
         )}
       </div>
+
+      {/* 附件预览条（输入框下方，发送后清空） */}
+      <AttachmentBar items={pendingAttachments} onRemove={removeAttachment} />
 
       {/* 引用笔记标签（输入框下方） */}
       {selectedNotes.length > 0 && (

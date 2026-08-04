@@ -50,8 +50,62 @@ class TokenCounter:
         return max(1, len(text) // 2)
     
     @classmethod
+    def count_image(cls, width: int, height: int) -> int:
+        """
+        估算单张图片的 token 消耗（按长边分辨率，DashScope VL 系列计价简化公式）
+
+        Args:
+            width: 图片宽度（像素）
+            height: 图片高度（像素）
+
+        Returns:
+            估算 token 数
+        """
+        if not width or not height:
+            return 1500  # 未知尺寸按中等估算
+        long_edge = max(width, height)
+        if long_edge <= 1024:
+            return 1000
+        return 2000
+
+    @classmethod
+    def count_content(cls, content, model_name: str = "cl100k_base") -> int:
+        """
+        计算消息 content 的 token 数（兼容多模态 content 块列表）
+
+        content 为字符串 → 文本计数；
+        content 为列表（OpenAI 多模态格式）→ 逐块累计：
+        - text 块走文本计数
+        - image_url 块按图片尺寸估算（无法获取尺寸时按中等估算）
+        - video_url 块按固定预留（帧数未知，按 8 帧估算）
+
+        Args:
+            content: 消息 content（str 或多模态块列表）
+            model_name: 编码器名称
+
+        Returns:
+            token 数
+        """
+        if isinstance(content, str):
+            return cls.count(content, model_name)
+        if isinstance(content, list):
+            total = 0
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get("type", "")
+                if block_type == "text":
+                    total += cls.count(block.get("text", ""), model_name)
+                elif block_type == "image_url":
+                    total += 1500  # 无尺寸信息，按中等估算（见 count_image）
+                elif block_type == "video_url":
+                    total += 16000  # 视频按 8 帧 × 2000 估算
+            return total
+        return cls.count(str(content), model_name)
+
+    @classmethod
     def count_messages(cls, messages: list, model_name: str = "cl100k_base") -> int:
-        """计算消息列表的总 token 数（含角色标记开销）"""
+        """计算消息列表的总 token 数（含角色标记开销，支持多模态 content）"""
         total = 0
         for msg in messages:
             total += 4  # 每条消息固定开销：角色标记
@@ -62,7 +116,7 @@ class TokenCounter:
                 content = msg.get("content", "")
             else:
                 content = str(msg)
-            total += cls.count(content, model_name)
+            total += cls.count_content(content, model_name)
         total += 2  # 序列结束标记
         return total
 
@@ -77,7 +131,7 @@ class TokenBudget:
     根据模型上下文窗口大小，为各组件分配固定/动态配额。
     """
     model_context_size: int = 32768       # 模型上下文窗口总大小
-    
+
     # 固定分配
     system_prompt: int = 500              # 系统提示词
     rag_context_max: int = 2000           # RAG 上下文上限
@@ -85,6 +139,10 @@ class TokenBudget:
     agent_scratchpad_reserve: int = 4000  # 工具调用预留
     current_input_estimate: int = 300     # 当前输入估算
     safety_margin: int = 1000             # 安全余量
+
+    # 多模态（图片/视频）预算
+    image_tokens_per_msg: int = 3000      # 单条消息图片预留（当前消息优先保证）
+    max_history_images: int = 4           # 历史回放单条消息最多保留的图片数
     
     @property
     def fixed_budget(self) -> int:

@@ -11,6 +11,8 @@ from app.models.chat import ChatSession, ChatMessage
 from app.models.review import ReviewRecord
 from app.models.note_template import NoteTemplate
 from app.models.knowledge import KnowledgeDocument
+from app.models.model_trace import ModelTrace, ModelPricing
+from app.models.tool_audit import ToolCallAudit
 
 __all__ = [
     "Base",
@@ -21,4 +23,7 @@ __all__ = [
     "ReviewRecord",
     "NoteTemplate",
     "KnowledgeDocument",
+    "ModelTrace",
+    "ModelPricing",
+    "ToolCallAudit",
 ]

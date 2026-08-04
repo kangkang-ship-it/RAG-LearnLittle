@@ -1,0 +1,21 @@
+# 模型定价（元 / 1K tokens）
+#
+# ⚠️ 以下为占位值，需按阿里云百炼官网实际价格核实后更新！
+#    input_price_per_1k / output_price_per_1k 分别为每千 token 的输入/输出单价。
+#    模型名须与 ModelTrace.model 精确一致（含日期版本后缀）。
+#
+# 生效方式：应用启动时种子进 model_pricing 表（upsert），修改后重启服务生效。
+
+models:
+  # 主对话模型（普通 + 深度思考 + 标题/RAG/摘要）
+  qwen3.8-max:
+    input_price_per_1k: 0.02
+    output_price_per_1k: 0.06
+  # 视觉模型（图片/视频理解）
+  qwen3.7-max-2026-06-08:
+    input_price_per_1k: 0.02
+    output_price_per_1k: 0.06
+  # 轻量模型（查询分类 + Plan 生成）
+  qwen3.7-flash-2026-07-15:
+    input_price_per_1k: 0.0003
+    output_price_per_1k: 0.0006

@@ -168,6 +168,31 @@ export interface BatchOperation {
 
 // ========== 聊天 ==========
 
+/** 聊天附件元数据（对应后端 AttachmentMeta） */
+export interface AttachmentMeta {
+  file_id: string;
+  file_type: 'image' | 'video';
+  original_name: string;
+  file_size?: number;
+  mime_type?: string;
+  width?: number;
+  height?: number;
+  duration_sec?: number | null;
+}
+
+/** 附件上传响应（对应后端 UploadResponse） */
+export interface UploadResponse {
+  file_id: string;
+  file_type: 'image' | 'video';
+  mime_type: string;
+  original_name: string;
+  file_size: number;
+  width?: number | null;
+  height?: number | null;
+  duration_sec?: number | null;
+  created_at: string;
+}
+
 /** 聊天消息 */
 export interface ChatMessage {
   id: number;
@@ -176,6 +201,8 @@ export interface ChatMessage {
   content: string;
   token_count?: number;
   created_at: string;
+  /** 附件元数据（用户消息携带） */
+  attachments?: AttachmentMeta[];
 }
 
 /** 聊天会话 */
@@ -198,8 +225,13 @@ export interface MessageListResponse {
 /** 对话请求 */
 export interface QueryRequest {
   session_id?: string;
-  message: string;
+  /** 用户消息（可空：仅发附件时为空，由后端占位） */
+  message?: string;
   idempotency_key?: string;
+  /** 深度思考开关 */
+  enable_thinking?: boolean;
+  /** 附件 ID 列表（先上传后发送） */
+  attachment_ids?: string[];
 }
 
 /** 会话标题修改 */

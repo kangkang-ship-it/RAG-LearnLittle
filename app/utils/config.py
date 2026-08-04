@@ -181,3 +181,23 @@ def get_tool_routing_config() -> dict:
         例: {"default_groups": [...], "keyword_rules": {"note_write": [...]}}
     """
     return load_yaml("agent.yaml").get("tool_routing", {})
+
+
+def get_pricing_config() -> dict:
+    """
+    获取模型定价配置（config/pricing.yaml）
+
+    Returns:
+        定价配置字典，例: {"models": {"qwen3.8-max": {"input_price_per_1k": 0.02, ...}}}
+    """
+    return load_yaml("pricing.yaml")
+
+
+def get_security_config() -> dict:
+    """
+    获取安全配置（agent.yaml security 段，P2-3）
+
+    Returns:
+        agent.yaml 中的 security 配置字典
+    """
+    return load_yaml("agent.yaml").get("security", {})
