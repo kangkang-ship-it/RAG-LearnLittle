@@ -22,6 +22,7 @@ from typing import Optional, List
 
 from langchain_core.tools import tool
 
+from app.ai_service.tool_registry import init_tool_registry, tool_registry
 from app.core.logger_handler import logger
 
 
@@ -413,30 +414,32 @@ def create_agent_tools(
         "send_email": send_email,
     }
 
-    # 按需加载：根据 groups 过滤工具   TODO: 未来可以增加工具组的动态注册机制，允许用户自定义工具组
-    if groups is None:
-        # 未指定 groups → 返回全部（向后兼容）
-        return list(all_tools.values())
+    # ===== 工具组解析（P2-6 ToolRegistry）=====
+    # 组定义与动态工具（MCP）统一由注册表解析；内置工具实例仍在本函数内创建（绑定用户上下文）
+    init_tool_registry()
 
-    # 从配置加载工具组定义
-    from app.utils.config import get_tool_groups_config
-    tool_groups = get_tool_groups_config()
-
-    selected_names = set()
-    for group_name in groups:
-        group_tools = tool_groups.get(group_name, [])
-        if not group_tools:
+    for group_name in groups or []:
+        if group_name not in tool_registry.all_groups():
             logger.warning(f"工具组 '{group_name}' 未在 agent.yaml 中定义，跳过")
-            continue
-        selected_names.update(group_tools)
 
-    # 保持注册顺序返回
-    result = [all_tools[name] for name in all_tools if name in selected_names]
+    # 组名列表 → 工具名列表（None 表示全部组，向后兼容）
+    resolved_names = tool_registry.resolve_names(groups)
+
+    result = []
+    for name in resolved_names:
+        if name in all_tools:
+            result.append(all_tools[name])
+        else:
+            dyn = tool_registry.get_dynamic(name)
+            if dyn is not None:
+                result.append(dyn)  # MCP 动态工具（P2-6 预留）
+            else:
+                logger.warning(f"工具路由: 工具 '{name}' 未注册，跳过")
 
     # 安全保底：至少包含 base 组工具
     if not result:
         logger.warning("按需加载结果为空，回退到全量工具")
         return list(all_tools.values())
 
-    logger.debug(f"工具按需加载: groups={groups}, 选中 {len(result)}/{len(all_tools)} 个工具")
+    logger.debug(f"工具按需加载: groups={groups}, 选中 {len(result)} 个工具（注册表解析）")
     return result
