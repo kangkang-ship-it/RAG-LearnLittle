@@ -23,13 +23,15 @@ from app.core.logger_handler import logger
 from app.core.success_response import success_response
 from app.core.rate_limit import rate_limit
 from app.core.failed_response import BusinessError, ErrorCode
-from app.core.model_trace import set_trace_context, clear_trace_context, set_trace_stage, new_request_id
+from app.core.model_trace import set_trace_context, clear_trace_context, new_request_id
 from app.db.database import get_db, async_session_factory
 from app.schemas.chat import (
     QueryRequest, RAGRequest, ChatSessionListResponse,
     MessageListResponse, SessionTitleUpdate, UploadResponse,
 )
 from app.utils.auth_utils import get_current_user_id
+from app.ai_service.chat_route import ChatRouteContext
+from app.ai_service.chat_graph import stream_chat_graph
 from app.services.chat_service import ChatService
 from app.services.database_session_manager import DatabaseSessionManager
 from app.services.chat_attachment_service import ChatAttachmentService
@@ -48,13 +50,6 @@ LLM_STREAM_TIMEOUT = int(os.getenv("LLM_STREAM_TIMEOUT", "60"))
 # 防止恶意用户通过大量 SSE 连接耗尽服务器资源
 SSE_MAX_CONNECTIONS_PER_USER = 3
 _sse_active_counts: dict[str, int] = {}
-
-
-class _AttachmentOnlyClassification:
-    """仅附件消息的分类结果（无文本可分类，直接走 ReAct 多模态路径）"""
-    complexity = "simple"
-    source = "attachment"
-    reason = "仅附件消息，无文本可分类"
 
 
 def _estimate_attachment_tokens(attachments) -> int:
@@ -493,22 +488,6 @@ async def chat_query(
                 if attachment_content:
                     yield f"data: {json.dumps({'type': 'thinking', 'stage': 'attachment', 'content': f'附件解析完成（{len(attachment_content)} 张图像）'})}\n\n"
 
-            # ===== 查询复杂度分类 + 混合路由 =====
-            from app.ai_service.query_classifier import QueryClassifier
-
-            if data.message.strip():
-                set_trace_stage("classify")  # 模型 trace 阶段标记（P0）
-                classifier = QueryClassifier(llm_model=getattr(init_manager, 'classifier_model', None))
-                classification = await classifier.classify(data.message)  # 分类结果包含 complexity, source, reason，判断复杂度
-            else:
-                # 仅附件消息：无文本可分类，直接走 ReAct 多模态路径
-                classification = _AttachmentOnlyClassification()
-                logger.info("仅附件消息，跳过复杂度分类，直接走 ReAct 多模态路径")
-            logger.info(
-                f"查询分类: complexity={classification.complexity}, "
-                f"source={classification.source}, reason={classification.reason}"
-            )
-            
             # 获取笔记服务和回顾服务（等待阶段 2 完成，最多等待 5 秒）
             note_service = None
             review_service = None
@@ -526,130 +505,40 @@ async def chat_query(
             except Exception as e:
                 logger.warning(f"获取 Agent 工具服务失败: {e}")
             
+            # ===== 执行对话编排图（P2-1 第二步：LangGraph StateGraph）=====
+            # 查询分类 / 路由决策 / ReAct | Plan 执行全部在图内完成；
+            # 事件流经总线产出，SSE 契约与改造前一致
+            ctx = ChatRouteContext(
+                agent_model=agent_model,
+                plan_model=getattr(init_manager, "plan_model", None),
+                classifier_model=getattr(init_manager, "classifier_model", None),
+                user_id=user_id,
+                user_message=data.message,
+                system_prompt=system_prompt,
+                compressed_messages=compressed_messages,
+                db_session_factory=async_session_factory,
+                note_service=note_service,
+                review_service=review_service,
+                email_service=init_manager.email_service,
+                attachment_content=attachment_content,
+                attachment_names=attachment_names or None,
+                react_timeout=LLM_STREAM_TIMEOUT,
+                plan_timeout=LLM_STREAM_TIMEOUT * 2,
+            )
+
+            # 执行 + 事件转发（error 后不发 done、不保存回复，与改造前一致）
             accumulated = ""
-            
-            if classification.complexity == "simple":
-                # ===== 简单问题：走现有 ReAct Agent（逻辑完全不变）=====
-                set_trace_stage("agent")  # 模型 trace 阶段标记（P0）
-                from app.ai_service.agent_runner import execute_agent
+            errored = False
+            async for event in stream_chat_graph(ctx):
+                if event.get("type") == "response":
+                    accumulated += event.get("content", "")
+                elif event.get("type") == "error":
+                    errored = True
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
-                async for event in execute_agent(
-                    chat_model=agent_model,
-                    user_id=user_id,
-                    user_message=data.message,
-                    system_prompt=system_prompt,
-                    compressed_messages=compressed_messages,
-                    db_session_factory=async_session_factory,
-                    note_service=note_service,
-                    review_service=review_service,
-                    email_service=init_manager.email_service,
-                    timeout=LLM_STREAM_TIMEOUT,
-                    attachment_content=attachment_content,
-                ):
-                    event_type = event.get("type", "")
-                    
-                    if event_type == "response":
-                        accumulated += event.get("content", "")
-                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                    elif event_type == "error":
-                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                        return
-                    elif event_type == "stream_done":
-                        break
-            else:
-                # ===== 复杂问题：走 Plan-and-Execute Agent =====
-                set_trace_stage("plan_execute")  # 模型 trace 阶段标记（P0）
-                plan_model = getattr(init_manager, 'plan_model', None)  # 获取用于制定计划的模型
-                
-                if plan_model is None:
-                    # Plan 模型不可用，降级为 ReAct
-                    logger.warning("Plan 模型不可用，复杂查询降级为 ReAct")
-                    from app.ai_service.agent_runner import execute_agent
-                    
-                    async for event in execute_agent(
-                        chat_model=agent_model,
-                        user_id=user_id,
-                        user_message=data.message,
-                        system_prompt=system_prompt,
-                        compressed_messages=compressed_messages,
-                        db_session_factory=async_session_factory,
-                        note_service=note_service,
-                        review_service=review_service,
-                        timeout=LLM_STREAM_TIMEOUT,
-                        attachment_content=attachment_content,
-                    ):
-                        event_type = event.get("type", "")
-                        if event_type == "response":
-                            accumulated += event.get("content", "")
-                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                        elif event_type == "error":
-                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                            return
-                        elif event_type == "stream_done":
-                            break
-                else:   # Plan 模型可用，执行 Plan-and-Execute
-                    from app.ai_service.plan_execute_agent import execute_plan_agent
-
-                    async for event in execute_plan_agent(
-                        chat_model=agent_model,
-                        plan_model=plan_model,
-                        user_id=user_id,
-                        user_message=data.message,
-                        system_prompt=system_prompt,
-                        compressed_messages=compressed_messages,
-                        db_session_factory=async_session_factory,
-                        note_service=note_service,
-                        review_service=review_service,
-                        email_service=init_manager.email_service,
-                        timeout=LLM_STREAM_TIMEOUT * 2,
-                        attachment_content=attachment_content,
-                        attachment_names=attachment_names or None,
-                    ):
-                        event_type = event.get("type", "")
-                        
-                        if event_type == "response":
-                            accumulated += event.get("content", "")
-                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                        elif event_type == "error":
-                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                            return
-                        elif event_type == "plan_fallback":
-                            # Plan 失败，降级为 ReAct
-                            logger.info(f"Plan 降级: {event.get('reason', '')}")
-                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                            from app.ai_service.agent_runner import execute_agent
-                            
-                            async for fallback_event in execute_agent(
-                                chat_model=agent_model,
-                                user_id=user_id,
-                                user_message=data.message,
-                                system_prompt=system_prompt,
-                                compressed_messages=compressed_messages,
-                                db_session_factory=async_session_factory,
-                                note_service=note_service,
-                                review_service=review_service,
-                                timeout=LLM_STREAM_TIMEOUT,
-                                attachment_content=attachment_content,
-                            ):
-                                ft = fallback_event.get("type", "")
-                                if ft == "response":
-                                    accumulated += fallback_event.get("content", "")
-                                    yield f"data: {json.dumps(fallback_event, ensure_ascii=False)}\n\n"
-                                elif ft == "error":
-                                    yield f"data: {json.dumps(fallback_event, ensure_ascii=False)}\n\n"
-                                    return
-                                elif ft == "stream_done":
-                                    break
-                            break
-                        elif event_type in (
-                            "plan_start", "plan_step", "plan_step_start",
-                            "plan_step_end", "plan_synthesize", "plan_complete",
-                        ):
-                            # 推送 Plan 事件给前端
-                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                        elif event_type in ("tool_start", "tool_end"):
-                            # 透传工具调用状态（让前端知道正在执行工具）
-                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            if errored:
+                # 与现状一致：error 事件后不发送 done、不保存回复
+                return
             
             # 异步保存 AI 回复到数据库 + Redis（非阻塞，不延迟 done 事件）
             # 回复保存成功后回填附件 message_id（绑定消息，禁止单独删除）

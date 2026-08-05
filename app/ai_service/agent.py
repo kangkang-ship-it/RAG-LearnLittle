@@ -26,7 +26,7 @@ class AgentFactory:
         chat_model,
         tools: list,
         system_prompt: str = "",
-        max_iterations: int = 5,
+        max_iterations: int = 10,
     ):
         """
         创建 Agent 实例

@@ -12,6 +12,11 @@ import { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Send, Square, Plus, User, Bot, FileText, X, Search, Brain, Paperclip } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeHighlight from 'rehype-highlight';
+import rehypeKatex from 'rehype-katex';
 import { useSSE } from '../hooks/useSSE';
 import { useSessionStore } from '../stores/useSessionStore';
 import { useUserStore } from '../stores/useUserStore';
@@ -480,6 +485,25 @@ export default function AIChat() {
 
   const quickQuestions = ['帮我解释量子计算', '写一首春天的诗', '推荐几本好书'];
 
+/**
+ * AI 消息内容渲染：Markdown + LaTeX 数学公式（KaTeX）
+ * - remarkMath 解析 $...$ 行内公式与 $$...$$ 块级公式
+ * - rehypeKatex 将公式渲染为 KaTeX 排版
+ * - 流式中间态（未闭合的公式/代码块）由 react-markdown 安全降级为纯文本
+ */
+function MessageContent({ content }: { content: string }) {
+  return (
+    <div className="md-prose">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeHighlight, rehypeKatex]}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
   return (
     <div className="flex flex-col h-[calc(100vh-48px)]">
       {/* 头部 */}
@@ -553,7 +577,11 @@ export default function AIChat() {
                   ))}
                 </div>
               )}
-              <div className="text-sm whitespace-pre-wrap">{msg.content || '...'}</div>
+              {msg.role === 'assistant' ? (
+                <MessageContent content={msg.content || '...'} />
+              ) : (
+                <div className="text-sm whitespace-pre-wrap">{msg.content || '...'}</div>
+              )}
               {/* 用户消息附件渲染（图片缩略图 / 视频播放器，历史回显同样走这里） */}
               {msg.role === 'user' && msg.attachments && msg.attachments.length > 0 && (
                 <AttachmentViewer attachments={msg.attachments} />

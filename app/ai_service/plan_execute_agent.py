@@ -86,7 +86,7 @@ async def _generate_plan(
         )
 
     config = get_plan_execute_config()
-    plan_timeout = config.get("plan_timeout", 10)
+    plan_timeout = config.get("plan_timeout", 30)  # 与 agent.yaml 对齐（P2-1 技术债务）
 
     try:
         async with asyncio.timeout(plan_timeout):
@@ -342,7 +342,7 @@ async def _execute_batch(
     并行模式使用 asyncio.Queue 实时转发事件，确保前端能即时收到每个步骤的 token。
     """
     enable_parallel = config.get("enable_parallel", True)
-    step_timeout = config.get("step_timeout", 30)
+    step_timeout = config.get("step_timeout", 90)  # 与 agent.yaml 对齐（P2-1 技术债务）
 
     if enable_parallel and len(batch) > 1:
         # 并行执行（asyncio.Queue 实时多路复用）
@@ -414,7 +414,7 @@ async def _synthesize(
 
     from app.utils.prompt_loader import load_prompt
 
-    synthesize_timeout = config.get("synthesize_timeout", 30)
+    synthesize_timeout = config.get("synthesize_timeout", 60)  # 与 agent.yaml 对齐（P2-1 技术债务）
 
     # 构建步骤结果摘要
     plan_summary = plan.goal

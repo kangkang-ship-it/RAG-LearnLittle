@@ -381,6 +381,23 @@ code, pre {
   color: inherit;
 }
 
+/* ========== 数学公式（KaTeX） ========== */
+/* 块级公式 $$...$$：窄屏/长公式时横向滚动，避免撑破气泡 */
+.md-prose .katex-display {
+  margin: 0.5em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.2em 0.1em;
+}
+/* 行内公式 $...$ 与正文基线对齐 */
+.md-prose .katex {
+  font-size: 1.05em;
+}
+/* 流式渲染时公式可能未闭合（如只出现 $$），临时按普通文本展示 */
+.md-prose .katex-error {
+  color: var(--color-danger);
+}
+
 /* 引用块 */
 .md-prose blockquote {
   border-left: 3px solid var(--color-accent);

@@ -14,6 +14,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import App from './App';
 import './i18n';
+import 'katex/dist/katex.min.css';
 import './index.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
