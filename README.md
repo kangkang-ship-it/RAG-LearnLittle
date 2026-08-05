@@ -11,7 +11,7 @@
 ![LangGraph](https://img.shields.io/badge/LangGraph-LangChain-1C3C3C)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)
 ![ChromaDB](https://img.shields.io/badge/ChromaDB-1.0%2B-FC60A8)
-![Redis](https://img.shields.io/badge/Redis-5%2B-DC382D?logo=redis&logoColor=white)
+![Redis](https://img.shields.io/badge/redis--py-5%2B-DC382D?logo=redis&logoColor=white)
 ![MySQL](https://img.shields.io/badge/MySQL-8%2B-4479A1?logo=mysql&logoColor=white)
 
 </div>
@@ -20,7 +20,7 @@
 
 ## 📖 项目简介
 
-**云尚** 是一款基于 **RAG（检索增强生成）** 的 AI 智能笔记助手。它以你的笔记为知识库，支持 **ReAct / Plan-and-Execute 双 Agent 运行模式**、**深度思考**、**图片 / 视频多模态理解**，并提供笔记模板、回收站、邮件发送、Token 用量追踪等完整工具链 —— 从记录知识到提取知识，一站式完成。
+**云尚** 是一款基于 **RAG（检索增强生成）** 的 AI 智能笔记助手。它以你的笔记为知识库，支持 **ReAct / Plan-and-Execute 双 Agent 编排模式**（共享同一套工具集）、**深度思考**、**图片 / 视频多模态理解**，并提供笔记模板、回收站、邮件发送、Token 用量追踪等完整工具链 —— 从记录知识到提取知识，一站式完成。
 
 > 🎯 定位：本地优先的私人知识助手。支持 DashScope（阿里云百炼）与 Ollama（完全本地）双模型提供商一键切换。
 
@@ -42,12 +42,12 @@
 <div align="center">
 <table>
   <tr>
-    <td width="50%" align="center"><b>🗨️ AI 对话</b><br/><sub>（截图待补充）</sub></td>
-    <td width="50%" align="center"><b>🧠 深度思考 / 多模态</b><br/><sub>（截图待补充）</sub></td>
+    <td width="50%" align="center"><b>🗨️ AI 对话</b><br/><img src="docs/DMT.png" alt="AI 对话" width="100%"/></td>
+    <td width="50%" align="center"><b>🧠 深度思考 / 多模态</b><br/><img src="docs/SDSK.png" alt="深度思考 / 多模态" width="100%"/></td>
   </tr>
   <tr>
-    <td width="50%" align="center"><b>📓 笔记管理</b><br/><sub>（截图待补充）</sub></td>
-    <td width="50%" align="center"><b>🗺️ Plan-and-Execute</b><br/><sub>（截图待补充）</sub></td>
+    <td width="50%" align="center"><b>📓 笔记管理</b><br/><img src="docs/NoteImage.png" alt="笔记管理" width="100%"/></td>
+    <td width="50%" align="center"><b>🗺️ Plan-and-Execute</b><br/><img src="docs/Plan-And-Excute.png" alt="Plan-and-Execute" width="100%"/></td>
   </tr>
 </table>
 </div>
@@ -59,14 +59,15 @@
 | 模块 | 能力 |
 | :--- | :--- |
 | 🤖 **双 Agent 模式** | **ReAct**（逐步推理 + 工具调用）与 **Plan-and-Execute**（L1 规则 + L2 LLM 分类器混合路由） |
-| 🧠 **深度思考** | 前端开关控制思考模式，质量与延迟可权衡 |
+| 🧠 **深度思考** | 前端开关控制主模型思考模式（质量与延迟可权衡）；附件场景自动关闭（视觉模型理解附件）；Plan / 分类器由环境变量独立控制 |
 | 🖼️ **多模态理解** | 图片 / 视频附件上传（视频抽帧），视觉模型解答 |
 | 📚 **RAG 知识库** | ChromaDB 向量检索 + BM25 混合召回 + bge-reranker 重排序 + LLM 摘要 |
-| 🛠️ **Agent 工具层** | 笔记查询、发送邮件（安全校验 + 限流）等，支持审计 |
+| 🛠️ **Agent 工具层** | 5 组 11 个工具（基础 / 笔记读 / 笔记写 / 回顾 / 邮件）关键词路由按需加载 + 全量兜底；工具调用审计落库、邮件安全校验与限流 |
 | 📓 **笔记系统** | 富文本编辑（TipTap）、模板、AI 自动补全 / 打标签 |
 | 🗑️ **回收站** | 笔记删除进入回收站，14 天自动彻底清除（定时任务） |
 | ✉️ **邮件功能** | QQ 邮箱注册验证，笔记以 Markdown / PDF 导出发送 |
-| 💰 **Token 用量追踪** | model_trace 输出总线（log / db / langfuse），成本账单 |
+| 🗜️ **记忆压缩** | 滑动窗口 + 里程碑摘要 + Redis 热缓存的三级对话记忆管理，长对话不丢上下文 |
+| 💰 **Token 用量追踪** | model_trace 输出总线（log / db / langfuse），成本账单 API（前端用量面板开发中） |
 | 🌐 **前端体验** | React 19 + Vite + Tailwind，i18n 国际化，暗 / 亮主题 |
 | ✅ **黄金评测器** | tests/eval 自动化评测 AI 对话质量（含安全用例） |
 
@@ -85,7 +86,8 @@
 </div>
 
 - **后端**：FastAPI + SQLAlchemy(async) + MySQL + Redis（会话缓存 / 流式缓冲）
-- **Agent 编排**：LangChain / LangGraph，ReAct 与 Plan-and-Execute 双模式
+- **Agent 编排**：LangChain / LangGraph，ReAct 与 Plan-and-Execute 双模式；5 组工具关键词路由按需加载
+- **记忆**：滑动窗口 + 里程碑摘要 + Redis 热缓存的三级压缩
 - **检索**：ChromaDB 向量库 + BM25 + CrossEncoder 重排序（BAAI/bge-reranker-v2-m3）
 - **模型层**：DashScope（百炼）⇄ Ollama（本地）一键切换；Chat / Thinking / Vision / Classifier / Plan 多模型组合
 - **基础设施**：APScheduler 定时任务（回收站清理、孤儿附件清理）、Langfuse 可观测性
@@ -98,9 +100,9 @@
 | :--- | :--- |
 | 前端 | React 19 · TypeScript · Vite · TailwindCSS · TipTap · Zustand · i18next |
 | 后端 | Python 3.10+ · FastAPI · uvicorn · APScheduler |
-| Agent | LangChain · LangGraph · Langfuse |
-| 数据库 | MySQL 8 · Redis · ChromaDB |
-| 模型 | DashScope（qwen 系列）/ Ollama（本地）· sentence-transformers · tiktoken |
+| Agent | LangChain · LangGraph · langchain-openai（DashScope 兼容端点）· Langfuse |
+| 数据库 | MySQL 8 · Redis · ChromaDB（向量库）· rank-bm25（混合召回） |
+| 模型 | DashScope（qwen 系列）/ Ollama（本地）· sentence-transformers（CrossEncoder 重排序）· tiktoken（Token 估算）· imageio-ffmpeg（视频抽帧） |
 
 ---
 
@@ -113,14 +115,14 @@
 | Python | ≥ 3.10 |
 | Node.js | ≥ 18 |
 | MySQL | 8.x（创建数据库 `raglearn`） |
-| Redis | 6.x |
+| Redis | 服务器 ≥ 6.x（Python 客户端为 `redis 5.x`） |
 | 模型 | 二选一：① 阿里云百炼 `DASHSCOPE_API_KEY` ② Ollama（本地模型） |
 
 ### 1️⃣ 配置后端
 
 ```bash
-# 克隆项目
-git clone https://github.com/qiaojoin586-droid/RAG_LearnLittleCode.git && cd RagLearnCode
+# 克隆项目（仓库名 RAG_LearnLittleCode，克隆目录同名）
+git clone https://github.com/qiaojoin586-droid/RAG_LearnLittleCode.git && cd RAG_LearnLittleCode
 
 # 创建虚拟环境并安装依赖
 python -m venv .venv
@@ -150,10 +152,28 @@ MYSQL_DATABASE=raglearn
 REDIS_HOST=localhost
 REDIS_PORT=6379
 
-# 邮件（可选，QQ 邮箱授权码，非登录密码）
-SMTP_USERNAME=you_qq_email@qq.com
+# 邮件（可选，QQ 邮箱授权码，非登录密码；you_qq_email 替换为你的 QQ 邮箱）
+SMTP_USERNAME=you_qq_email
 SMTP_PASSWORD=your_smtp_auth_code
 ```
+
+### 📦 初始化数据库（首次运行）
+
+```sql
+CREATE DATABASE raglearn CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```
+
+其他关键配置项（完整清单见 `.env.example`，共 40+ 项）：
+
+| 配置项 | 说明 | 必填 |
+| :--- | :--- | :--- |
+| `VISION_MODEL` | 视觉模型（如 `qwen-vl-max`），**上传图片/视频附件时必须配置**，否则多模态不可用 | 附件场景必填 |
+| `CLASSIFIER_MODEL` / `PLAN_MODEL` | 轻量模型（L2 分类 / 计划生成），默认 `qwen3-flash`，留空自动回退主模型 | 否 |
+| `JWT_SECRET` | Token 签名密钥，**生产环境必须修改** | 生产必改 |
+| `HF_HUB_OFFLINE` | HuggingFace 离线模式，默认 `1`（阻止在线下载模型） | 否 |
+| `TRACE_SINK` | 模型调用 trace 通道（`log` / `db` / `langfuse`），默认 `log,db`；选 `langfuse` 需自行部署或注册 Langfuse 平台 | 否 |
+
+> 🖥️ 选择 `MODEL_PROVIDER=ollama`（本地）时，需配置 `OLLAMA_BASE_URL`（默认 `http://localhost:11434`）、`OLLAMA_CHAT_MODEL`、`OLLAMA_EMBED_MODEL`，并确保本地已拉取对应模型；视觉附件还需 `OLLAMA_VISION_MODEL`。
 
 ### 2️⃣ 启动后端
 
@@ -180,35 +200,102 @@ npm run dev
 | :--- | :--- | :--- |
 | `admin` | `admin1234` | 本地开发自动创建 |
 
-> 💡 切换 Embedding 提供商后需**删除并重建 ChromaDB 向量库**；切换模型提供商后需重启服务。
+> 💡 首次运行提示：
+> - **重排序模型首次下载**：`BAAI/bge-reranker-v2-m3`（约 1GB）需从 HuggingFace 下载。首次部署请临时设置 `HF_HUB_OFFLINE=0`，下载完成后可恢复离线模式
+> - 切换 Embedding 提供商后需**删除并重建 ChromaDB 向量库**（`data/chroma/`）；切换模型提供商后需重启服务
+> - 生产环境务必修改 `JWT_SECRET` 并设置 `LOG_LEVEL=INFO`、`LOG_FORMAT=json`
+
+---
+
+## 🔌 API 端点概览
+
+所有业务路由统一前缀 `/api/v1`，完整交互文档见 Swagger → `http://localhost:8000/docs`
+
+| 模块 | 端点 | 说明 |
+| :--- | :--- | :--- |
+| 认证 | `POST /auth/register` · `POST /auth/login` · `POST /auth/send-code` | 注册（邮箱验证码）/ 登录 / 发送验证码 |
+| 对话 | `POST /chat/query` | **Agent 流式对话（SSE）**，ReAct / Plan-Execute 混合路由 |
+| 对话 | `POST /chat/rag` | RAG 检索问答 |
+| 对话 | `POST /chat/files` · `GET /chat/files/{id}` | 上传 / 预览图片、视频附件 |
+| 会话 | `GET /chat/sessions` · `GET /chat/{id}/messages` · `PUT /chat/{id}/title` | 会话管理 |
+| 笔记 | `GET/POST /note` · `GET/PUT/DELETE /note/{id}` | 笔记 CRUD |
+| 笔记 | `GET /note/recycle-bin` · `POST /note/{id}/restore` · `DELETE /note/{id}/permanent` | 回收站 |
+| 笔记 | `POST /note/search` · `POST /note/autocomplete` · `POST /note/write-assistant` | 语义搜索 / AI 补全 / 写作辅助 |
+| 知识库 | `POST /knowledge/upload`（SSE 进度）· `GET /knowledge/documents` | 文档上传与管理 |
+| 回顾 | `GET /review/today` · `POST /review/{id}/complete` · `GET /review/stats` | 艾宾浩斯回顾 |
+| 模板 | `GET/POST /note-template` · `PUT/DELETE /note-template/{id}` | 笔记模板 |
+| 用量 | `GET /usage/summary` | 模型调用用量与费用 |
+| 健康 | `GET /health` · `GET /ready` | 存活 / 就绪探针 |
+
+### SSE 事件协议（`POST /chat/query`）
+
+请求体字段：`message`（可空，为空时必须带 `attachment_ids`）· `session_id` · `enable_thinking` · `idempotency_key` · `attachment_ids`
+
+| 事件 | 说明 |
+| :--- | :--- |
+| `thinking` | 思考阶段提示（`stage`: rag / processing / attachment） |
+| `response` | 逐 token 回复内容 |
+| `tool_start` / `tool_end` | 工具调用开始 / 完成（含耗时） |
+| `plan_start` / `plan_step` / `plan_step_start` / `plan_step_end` / `plan_synthesize` / `plan_complete` | Plan-and-Execute 全流程事件 |
+| `plan_fallback` | Plan 执行失败，自动降级为 ReAct |
+| `error` | 错误信息（含超时） |
+| `done` | 流结束，含 `session_id`；RAG 命中时附 `sources`（引用来源，最多 3 条） |
+
+---
+
+## ⚙️ 配置说明
+
+系统行为可通过 `config/` 下的 YAML 文件调优（无需改代码）：
+
+| 文件 | 作用 | 核心配置项 |
+| :--- | :--- | :--- |
+| `config/agent.yaml` | **Agent 行为配置**（系统核心） | 迭代上限、Plan-Execute 各阶段超时、L1 规则 + L2 LLM 分类、工具分组与关键词路由、Token 预算、记忆压缩阈值、邮件限流 |
+| `config/chroma.yaml` | 向量库配置 | 持久化目录、集合名、文本切片参数、重排序模型 |
+| `config/prompt.yaml` | 提示词模板配置 | 提示词加载相关 |
+| `config/pricing.yaml` | 模型定价种子 | 按 input / output token 单价计价（元 / 千 token），启动时 upsert 进 `model_pricing` 表 |
+
+`prompts/` 目录存放 12 个 Agent 提示词文件，可直接编辑调优，如 `main_prompt.txt`（主 Agent）、`plan_generation.txt`（计划生成）、`classify_complexity.txt`（L2 分类）、`rag_summarize.txt`（RAG 摘要）等。
 
 ---
 
 ## 📁 项目结构
 
 ```
-RagLearnCode/
+RAG_LearnLittleCode/          # 本地目录名可自由修改
 ├── main.py                  # FastAPI 入口（生命周期 / 中间件 / 路由注册）
 ├── app/
 │   ├── core/                # 日志、异常处理、model_trace、scheduler
 │   ├── db/                  # SQLAlchemy、Redis 客户端
-│   ├── models/              # ORM 模型（用户 / 笔记 / 知识库 / 模板）
+│   ├── models/              # ORM 模型（用户 / 笔记 / 知识库 / 模板 / 工具审计）
 │   ├── rag/                 # RAG 核心（向量库、检索、RagService、任务队列）
 │   ├── routers/             # API 路由（chat / note / user / knowledge ...）
-│   ├── services/            # 业务服务（笔记、邮件、用量、模板）
-│   ├── ai_service/          # Agent 编排（ReAct / Plan-and-Execute / 多模态）
+│   ├── services/            # 业务服务（笔记、邮件、用量、记忆压缩、模板）
+│   ├── ai_service/          # Agent 编排（ReAct / Plan-Execute / 工具集 / 流式输出 / 中间件）
 │   ├── utils/               # 模型工厂、Prompt 加载、Token 估算
 │   └── schemas/             # Pydantic 模型
+├── config/                  # YAML 配置（agent / chroma / prompt / pricing）
 ├── front/                   # React 19 + Vite 前端
-├── prompts/                 # Agent 系统提示词（可配置）
+├── prompts/                 # Agent 系统提示词（main / plan / classify 等 12 个）
+├── templates/               # 邮件 HTML 模板
+├── data/                    # ChromaDB 持久化 + 用户附件（运行时生成）
+├── logs/                    # 日志输出目录（运行时生成）
 ├── tests/eval/              # AI 对话黄金评测器
 ├── docs/                    # 架构图与升级设计方案
+├── .env.example              # 环境变量模板（40+ 项，含完整注释）
 └── requirements.txt
 ```
 
 ---
 
 ## ✅ 测试与评测
+
+### 单元测试
+
+```bash
+pytest test_plan_execute.py -v   # Plan-and-Execute 流程测试
+```
+
+### AI 对话黄金评测
 
 内置 **AI 对话黄金评测器**：读取 `golden_cases.json`，逐条调用 `/chat/query`（SSE 流式），按关键词判定 PASS/FAIL，覆盖对话、RAG、笔记、安全注入等分类：
 
@@ -217,6 +304,37 @@ RagLearnCode/
 ```
 
 报告输出至 `tests/eval/results/report_*.json`。
+
+---
+
+## ⚠️ 已知限制
+
+- **流式 Token 统计**：DashScope 兼容模式下流式响应的 usage 可能为 null，影响成本统计精度
+- **多模态 + 深度思考**：视觉模型不支持思考模式，上传附件时自动走视觉模型，二者不可组合
+- **工具按需加载**：当前 `default_groups` 为全量加载兜底（关键词规则仅作加速），后续可改为纯按需加载以节省上下文窗口
+- **邮件限流**：`send_email` 限流为进程内滑动窗口（10 封 / 小时 / 用户），多进程部署需迁移至 Redis
+- **回收站**：笔记回收站最长保留 14 天，由定时任务自动彻底删除
+
+---
+
+## 🤝 开发指南
+
+### 代码风格
+
+- **后端**：Python PEP 8，类与方法使用中文 docstring；按 `routers / services / models / schemas / rag / ai_service` 分层，新增能力先写 service 再挂路由
+- **前端**：TypeScript 严格模式（`npm run build` 即 `tsc && vite build`，构建前必须通过类型检查）；函数式组件 + hooks + Zustand 状态管理
+
+### Git 约定
+
+- 分支：`main` 为稳定基线，新功能在独立分支开发（如 `Agent`），验证通过后合入
+- 提交信息：中文一句话描述改动内容与动机，重要改动附编号（如 P2-3）
+- 提交前运行 `pytest test_plan_execute.py` 与前端 `npm run build` 确认无回归
+
+### 配置调参
+
+- `config/agent.yaml` 是 Agent 行为中枢：工具分组、关键词路由、各阶段超时、Token 预算、记忆压缩阈值、邮件限流均可在此调整，修改后重启服务生效
+- `prompts/*.txt` 提示词可直接编辑，无需改代码
+- **新增工具**：在 `app/ai_service/agent_tools.py` 用 `@tool` 注册 → 加入 `config/agent.yaml` 的 `tool_groups` 与 `tool_routing.keyword_rules` → 用黄金评测器回归验证
 
 ---
 
