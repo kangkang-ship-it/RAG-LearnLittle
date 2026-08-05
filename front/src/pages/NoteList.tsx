@@ -21,6 +21,7 @@ import LoadingSkeleton from '../components/common/LoadingSkeleton';
 import TagBadge from '../components/common/TagBadge';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import type { Note } from '../types/api';
+import { NOTE_CATEGORIES, OTHER_CATEGORY, normalizeCategory } from '../constants/noteCategories';
 
 export default function NoteList() {
   const { t } = useTranslation();
@@ -71,7 +72,8 @@ export default function NoteList() {
     loadNotes(true);
   }, [category, debouncedSearch]);
 
-  const categories = ['', '工作', '学习', '生活', '技术'];
+  // 筛选选项卡：全部 + 标准分类 + 兜底"其他"（不在标准分类中的笔记归入"其他"）
+  const categories = ['', ...NOTE_CATEGORIES, OTHER_CATEGORY];
 
   /** 单条删除笔记 */
   const handleDelete = async (noteId: string) => {
@@ -281,7 +283,7 @@ export default function NoteList() {
               )}
               <div className="mt-3 text-xs text-[var(--color-text-tertiary)]">
                 {new Date(note.updated_at).toLocaleDateString()}
-                {note.category && ` · ${note.category}`}
+                {normalizeCategory(note.category) && ` · ${normalizeCategory(note.category)}`}
               </div>
             </div>
           ))}

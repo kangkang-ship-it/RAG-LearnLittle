@@ -19,6 +19,7 @@ import { notesApi } from '../api/notes';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import EmptyState from '../components/common/EmptyState';
 import type { DeletedNote } from '../types/api';
+import { normalizeCategory } from '../constants/noteCategories';
 
 const PAGE_SIZE = 20;
 
@@ -249,7 +250,7 @@ export default function RecycleBin() {
                 <p className="mt-1.5 text-xs text-[var(--color-text-tertiary)]">
                   删除时间：
                   {note.deleted_at ? new Date(note.deleted_at).toLocaleString('zh-CN') : '-'}
-                  {note.category ? ` · 分类：${note.category}` : ''}
+                  {normalizeCategory(note.category) ? ` · 分类：${normalizeCategory(note.category)}` : ''}
                 </p>
               </div>
 

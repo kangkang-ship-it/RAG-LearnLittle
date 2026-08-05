@@ -7,7 +7,9 @@
 from datetime import datetime
 from typing import Literal, Optional, List, TypedDict
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_serializer, model_validator
+
+from app.utils.time_utils import to_utc_iso
 
 
 class QueryRequest(BaseModel):
@@ -62,6 +64,10 @@ class UploadResponse(BaseModel):
     duration_sec: Optional[float] = None
     created_at: datetime
 
+    @field_serializer("created_at")
+    def _ser_created_at(self, dt: datetime) -> str:
+        return to_utc_iso(dt)
+
 
 class ChatMessageResponse(BaseModel):
     """聊天消息响应"""
@@ -75,6 +81,11 @@ class ChatMessageResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
+    # 统一输出带 UTC 偏移的 ISO（数据库存 UTC naive，前端按本地时区展示）
+    @field_serializer("created_at")
+    def _ser_created_at(self, dt: datetime) -> str:
+        return to_utc_iso(dt)
+
 
 class ChatSessionResponse(BaseModel):
     """聊天会话响应"""
@@ -84,8 +95,13 @@ class ChatSessionResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     message_count: int = 0
-    
+
     model_config = {"from_attributes": True}
+
+    # 统一输出带 UTC 偏移的 ISO（前端按本地时区展示北京时间）
+    @field_serializer("created_at", "updated_at")
+    def _ser_time(self, dt: datetime) -> str:
+        return to_utc_iso(dt)
 
 
 class ChatSessionListResponse(BaseModel):

@@ -21,6 +21,7 @@ from app.core.logger_handler import logger
 from app.core.failed_response import BusinessError, ErrorCode
 from app.models.chat import ChatSession, ChatMessage, ChatSummary
 from app.db.redis_client import get_redis, delete_pattern
+from app.utils.time_utils import to_utc_iso, parse_db_time
 
 
 class DatabaseSessionManager:
@@ -135,8 +136,8 @@ class DatabaseSessionManager:
                 {
                     "id": s.id,
                     "title": s.title,
-                    "updated_at": s.updated_at.isoformat() if s.updated_at else None,
-                    "created_at": s.created_at.isoformat() if s.created_at else None,
+                    "updated_at": to_utc_iso(s.updated_at),
+                    "created_at": to_utc_iso(s.created_at),
                 }
                 for s in sessions
             ]
@@ -276,7 +277,7 @@ class DatabaseSessionManager:
                             attachments_json=msg_data.get("attachments_json"),
                         )
                         if msg_data.get("created_at"):
-                            msg.created_at = datetime.fromisoformat(msg_data["created_at"])
+                            msg.created_at = parse_db_time(msg_data["created_at"])
                         messages.append(msg)
                     
                     # Redis 中最新在前，反转为正序
@@ -290,8 +291,8 @@ class DatabaseSessionManager:
         query = select(ChatMessage).where(ChatMessage.session_id == session_id)
         
         if cursor:
-            # 游标分页：获取比 cursor 更早的消息
-            cursor_time = datetime.fromisoformat(cursor)
+            # 游标分页：获取比 cursor 更早的消息（parse_db_time 兼容 naive/带偏移两种游标格式）
+            cursor_time = parse_db_time(cursor)
             query = query.where(ChatMessage.created_at < cursor_time)
         
         query = query.order_by(ChatMessage.created_at.desc()).limit(limit + 1)
@@ -347,7 +348,7 @@ class DatabaseSessionManager:
                     "id": m.id,
                     "role": m.role,
                     "content": m.content,
-                    "created_at": m.created_at.isoformat() if m.created_at else None,
+                    "created_at": to_utc_iso(m.created_at),
                     "attachments_json": m.attachments_json,
                 }
                 for m in reversed(messages)
@@ -374,7 +375,7 @@ class DatabaseSessionManager:
                 "id": message.id,
                 "role": message.role,
                 "content": message.content,
-                "created_at": message.created_at.isoformat() if message.created_at else None,
+                "created_at": to_utc_iso(message.created_at),
                 "attachments_json": message.attachments_json,
             }, ensure_ascii=False)
             

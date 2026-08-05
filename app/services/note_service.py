@@ -26,6 +26,12 @@ from app.models.review import ReviewRecord
 from app.schemas.note import NoteCreate, NoteUpdate
 
 
+# 笔记标准分类（与前端 front/src/constants/noteCategories.ts 保持一致）
+STANDARD_NOTE_CATEGORIES = ("工作", "学习", "生活", "技术")
+# 兜底分类：分类非空且不属于标准分类时归入"其他"
+OTHER_CATEGORY = "其他"
+
+
 class NoteService:
     """
     笔记服务类
@@ -147,8 +153,15 @@ class NoteService:
         )
         
         if category:
-            query = query.where(Note.category == category)
-            count_query = count_query.where(Note.category == category)
+            if category == OTHER_CATEGORY:
+                # "其他"兜底分类：分类非空且不属于标准分类（含历史任意分类值）。
+                # not_in 对 NULL 不匹配 → 排除"未分类"；列表中加入空串 → 排除空分类旧数据
+                excluded = STANDARD_NOTE_CATEGORIES + ("",)
+                query = query.where(Note.category.not_in(excluded))
+                count_query = count_query.where(Note.category.not_in(excluded))
+            else:
+                query = query.where(Note.category == category)
+                count_query = count_query.where(Note.category == category)
         
         # 排序：置顶优先，然后按更新时间倒序
         query = query.order_by(Note.is_pinned.desc(), Note.updated_at.desc())

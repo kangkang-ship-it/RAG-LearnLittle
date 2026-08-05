@@ -288,6 +288,43 @@ code, pre {
   opacity: 0.8;
 }
 
+/* ========== AI 思考加载动画（与 docs/thinking-loader-demo.html 规格一致） ========== */
+.thinking-loading {
+  display: inline-flex;
+  align-items: center;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+/* 圆点容器：行内排列，与"正在思考"文字保持 4px 间距 */
+.thinking-dots {
+  display: inline-flex;
+}
+/* 省略号圆点：直径 6px，颜色随主题次要文字色 */
+.thinking-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: var(--color-text-tertiary);
+  opacity: 0.3;
+  /* 单周期 1.4s，fill-mode both 保证首帧即 0.3 避免闪烁；
+     循环动画仅用 opacity（合成器属性，移动端零重绘），transform 禁止用于循环动画 */
+  animation: thinking-dot-blink 1.4s ease-in-out infinite both;
+}
+@keyframes thinking-dot-blink {
+  0%, 100% { opacity: 0.3; }
+  50%      { opacity: 1; }
+}
+/* 三个点依次延迟 0.2s：0s / 0.2s / 0.4s */
+.thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+/* 减少动效偏好：跳过动画，静态显示三个圆点 */
+@media (prefers-reduced-motion: reduce) {
+  .thinking-dot { animation: none; opacity: 0.6; }
+}
+
 /* ========== Markdown 预览区排版 ========== */
 .md-prose {
   font-family: var(--font-body);

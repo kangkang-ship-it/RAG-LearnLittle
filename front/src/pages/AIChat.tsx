@@ -11,12 +11,13 @@
 import { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Send, Square, Plus, User, Bot, FileText, X, Search, Brain, Paperclip } from 'lucide-react';
+import { Send, Square, Plus, User, FileText, X, Search, Brain, Paperclip } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
+import { normalizeCategory } from '../constants/noteCategories';
 import { useSSE } from '../hooks/useSSE';
 import { useSessionStore } from '../stores/useSessionStore';
 import { useUserStore } from '../stores/useUserStore';
@@ -45,7 +46,8 @@ export default function AIChat() {
 
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
-  const [thinkingStages, setThinkingStages] = useState<{ stage: string; content: string }[]>([]);
+  // 思考阶段日志仍在 SSE 回调中收集（保留收集便于将来恢复展示），当前 UI 仅显示"正在思考"加载动画
+  const [, setThinkingStages] = useState<{ stage: string; content: string }[]>([]);
   // 深度思考开关（默认关闭；开启后请求带 enable_thinking=true，后端切换思考模型）
   const [enableThinking, setEnableThinking] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -551,7 +553,7 @@ function MessageContent({ content }: { content: string }) {
           <div key={msg.id} className={`flex items-start gap-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             {msg.role === 'assistant' && (
               <div className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-[var(--color-accent-bg)]">
-                <Bot size={18} className="text-[var(--color-accent)]" />
+                <span role="img" aria-label="AI 助手" className="text-[18px] leading-none">🤖</span>
               </div>
             )}
             <div className={`max-w-[80%] p-3 rounded-[var(--radius-md)] ${
@@ -570,11 +572,15 @@ function MessageContent({ content }: { content: string }) {
                   currentTool={currentTool}
                 />
               )}
-              {msg.role === 'assistant' && thinkingStages.length > 0 && !msg.content && (
-                <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">
-                  {thinkingStages.map((s, i) => (
-                    <div key={i}>• {s.content || s.stage}</div>
-                  ))}
+              {/* AI 思考加载态：内容为空时显示"正在思考" + 3 个跳动圆点（demo 规格一致） */}
+              {msg.role === 'assistant' && !msg.content && (
+                <div className="thinking-loading" role="status" aria-live="polite">
+                  <span>正在思考</span>
+                  <span className="thinking-dots" aria-hidden="true">
+                    <span className="thinking-dot" />
+                    <span className="thinking-dot" />
+                    <span className="thinking-dot" />
+                  </span>
                 </div>
               )}
               {msg.role === 'assistant' ? (
@@ -691,8 +697,8 @@ function MessageContent({ content }: { content: string }) {
                     >
                       <FileText size={14} className="flex-shrink-0" />
                       <span className="truncate">{note.title}</span>
-                      {note.category && (
-                        <span className="ml-auto text-xs text-[var(--color-text-tertiary)] flex-shrink-0">{note.category}</span>
+                      {normalizeCategory(note.category) && (
+                        <span className="ml-auto text-xs text-[var(--color-text-tertiary)] flex-shrink-0">{normalizeCategory(note.category)}</span>
                       )}
                     </button>
                   );

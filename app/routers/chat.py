@@ -30,6 +30,7 @@ from app.schemas.chat import (
     MessageListResponse, SessionTitleUpdate, UploadResponse,
 )
 from app.utils.auth_utils import get_current_user_id
+from app.utils.time_utils import to_utc_iso
 from app.ai_service.chat_route import ChatRouteContext
 from app.ai_service.chat_graph import stream_chat_graph
 from app.services.chat_service import ChatService
@@ -778,8 +779,8 @@ async def list_sessions(
         return {
             "id": s.id,
             "title": s.title,
-            "created_at": s.created_at.isoformat() if hasattr(s, 'created_at') and s.created_at else None,
-            "updated_at": s.updated_at.isoformat() if hasattr(s, 'updated_at') and s.updated_at else None,
+            "created_at": to_utc_iso(getattr(s, 'created_at', None)),
+            "updated_at": to_utc_iso(getattr(s, 'updated_at', None)),
         }
     
     return success_response(data={"sessions": [_to_dict(s) for s in sessions]})

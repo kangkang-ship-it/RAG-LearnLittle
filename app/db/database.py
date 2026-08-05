@@ -12,7 +12,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from sqlalchemy import text, inspect
+from sqlalchemy import text, inspect, event
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -49,6 +49,23 @@ engine = create_async_engine(
     pool_recycle=3600,        # 连接回收时间（秒），防止 MySQL 8 小时超时断连
     echo=False,               # 生产环境关闭 SQL 日志
 )
+
+
+@event.listens_for(engine.sync_engine, "connect")
+def _set_mysql_session_utc(dbapi_connection, connection_record):
+    """连接建立后强制 MySQL 会话时区为 UTC。
+
+    func.now() 的返回值依赖会话时区：若服务器时区漂移（如换机器/容器时区变化），
+    存储时间会跟着变。统一强制 UTC 后，存储语义稳定（与 time_utils 的 UTC 约定配套），
+    前端展示时按浏览器本地时区自动转换（如北京时间 +08:00）。
+    """
+    try:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("SET time_zone = '+00:00'")
+        cursor.close()
+    except Exception:
+        # 非 MySQL 驱动（如测试用 sqlite）无此语句，静默跳过
+        pass
 
 # 异步会话工厂
 async_session_factory = async_sessionmaker(

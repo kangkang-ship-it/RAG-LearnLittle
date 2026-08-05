@@ -16,6 +16,7 @@ import { ArrowLeft, Save, Download, Bold, Italic, Heading1, Heading2, Code, List
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
+import { normalizeCategory } from '../constants/noteCategories';
 import 'highlight.js/styles/github.css';
 import { notesApi } from '../api/notes';
 import TagInput from '../components/common/TagInput';
@@ -85,7 +86,8 @@ export default function NoteEditor() {
         const raw = note.content || '';
         setContent(isHtml(raw) ? htmlToMarkdown(raw) : raw);
         setTags(note.tags || []);
-        setCategory(note.category || '');
+        // 分类归一化：非标准分类（如历史脏数据）统一归为"其他"，编辑保存时顺带规范化数据
+        setCategory(normalizeCategory(note.category) || '');
         setIsPinned(note.is_pinned);
       } catch {
         toast.error('加载笔记失败');
@@ -241,6 +243,7 @@ export default function NoteEditor() {
             <option value="学习">学习</option>
             <option value="生活">生活</option>
             <option value="技术">技术</option>
+            <option value="其他">其他</option>
           </select>
         </div>
         <div className="flex items-end">
