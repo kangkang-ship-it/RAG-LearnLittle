@@ -123,6 +123,10 @@ tool_groups:
   # 系统提示词已约束"仅当用户要求发送邮件时才调用"。若需真按需加载，见实施文档 P2-6 §6.2）
   email:
     - send_email
+  # PPT 生成组（讲解 PPT；不加入 default_groups，保持轻量工具集 ——
+  # 命中关键词才加载，qwen3-max 的工具 schema 越少幻觉率越低，见设计方案 §4.2）
+  ppt:
+    - generate_ppt_tool
 
 # 工具路由规则（关键词 → 工具组映射）
 tool_routing:
@@ -197,6 +201,16 @@ tool_routing:
       - "发到"
       - "转发"
       - "email"
+    ppt:
+      # 只用组合词（"讲解"单独用误伤率高，如「帮我讲解一下这个概念」），见设计方案 §4.2
+      - "PPT"
+      - "ppt"
+      - "幻灯片"
+      - "演示文稿"
+      - "做个ppt"
+      - "生成ppt"
+      - "讲解ppt"
+      - "整理成ppt"
 
 # 安全配置（P2-3 安全护栏）
 security:

@@ -201,3 +201,14 @@ def get_security_config() -> dict:
         agent.yaml 中的 security 配置字典
     """
     return load_yaml("agent.yaml").get("security", {})
+
+
+def get_ppt_config() -> dict:
+    """
+    获取 PPT 功能配置（config/ppt.yaml 的 ppt 段，设计方案 §8.2）
+
+    Returns:
+        ppt.yaml 中的 ppt 配置字典
+        例: {"max_notes": 10, "max_slides": 20, "themes": {...}}
+    """
+    return load_yaml("ppt.yaml").get("ppt", {})

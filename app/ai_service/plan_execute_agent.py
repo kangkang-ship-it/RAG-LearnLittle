@@ -47,6 +47,45 @@ class ExecutionPlan:
 # Phase 1: Plan（规划阶段）
 # ============================================================
 
+# Plan 规划器的工具短描述（供规划 LLM 决策步骤用；执行阶段的 Agent
+# 绑定真实工具 schema。描述集中维护，工具名来自配置自动同步，见 _build_plan_tool_list）
+_PLAN_TOOL_DESC = {
+    "what_time_is_now": "获取当前时间",
+    "get_user_info_tools": "获取当前用户基本信息（用户名、邮箱、ID）",
+    "search_notes_tool": "语义搜索用户笔记（返回 200 字符摘要）",
+    "get_note_content_tool": "获取单篇笔记的完整内容",
+    "get_note_stats_tool": "笔记分类统计",
+    "get_today_reviews_tool": "获取今日待回顾笔记",
+    "mark_reviewed_tool": "标记回顾完成",
+    "create_note_tool": "创建新笔记（支持 Markdown）",
+    "update_note_tool": "更新已有笔记",
+    "get_related_notes_tool": "获取关联笔记推荐",
+    "send_email": "发送邮件（笔记以 Markdown/PDF 附件发送到指定邮箱）",
+    "generate_ppt_tool": "根据选中的笔记生成可放映、可下载的讲解 PPT 文件（.pptx，工具返回下载链接；用户要求生成/制作 PPT、幻灯片、演示文稿时【必须】使用本工具，不要只输出文本大纲）",
+}
+
+
+def _build_plan_tool_list() -> str:
+    """从 agent.yaml tool_groups 动态构建「可用工具」清单。
+
+    修复（v1.6）：原 prompt 硬编码工具清单，新增工具（如 generate_ppt_tool）
+    不会被规划 LLM 感知——现在工具名取自配置，新增工具自动同步；
+    编号随清单动态生成，消除硬编码重复编号问题。
+    """
+    from app.utils.config import get_tool_groups_config
+
+    tool_groups = get_tool_groups_config()
+    names: List[str] = []
+    for tools in tool_groups.values():
+        for name in tools:
+            if name not in names:
+                names.append(name)
+    return "\n".join(
+        f"{i + 1}. {name} - {_PLAN_TOOL_DESC.get(name, '可用工具')}"
+        for i, name in enumerate(names)
+    )
+
+
 async def _generate_plan(
     plan_model,
     user_message: str,
@@ -76,6 +115,8 @@ async def _generate_plan(
     prompt_template = load_prompt("plan_generation")
     prompt = prompt_template.replace("{current_time}", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     prompt = prompt.replace("{user_message}", user_message[:1000])
+    # 动态注入工具清单（从 agent.yaml tool_groups 构建，与执行阶段工具集同步）
+    prompt = prompt.replace("{tool_list}", _build_plan_tool_list())
 
     # 注入附件摘要（plan_model 无法看图，但需知道附件存在以制定正确计划）
     if attachment_names:
@@ -218,6 +259,7 @@ async def _execute_step(
     note_service,
     review_service,
     email_service,
+    ppt_service,
     step_timeout: int,
     previous_results: Dict[int, str],
     attachment_content: Optional[List[dict]] = None,
@@ -266,6 +308,7 @@ async def _execute_step(
                 note_service=note_service,
                 review_service=review_service,
                 email_service=email_service,
+                ppt_service=ppt_service,
                 timeout=step_timeout,
                 override_groups=step_tool_groups,
                 attachment_content=attachment_content,
@@ -332,6 +375,7 @@ async def _execute_batch(
     note_service,
     review_service,
     email_service,
+    ppt_service,
     config: dict,
     previous_results: Dict[int, str],
     attachment_content: Optional[List[dict]] = None,
@@ -356,7 +400,8 @@ async def _execute_batch(
                 async for event in _execute_step(
                     step, chat_model, user_id, user_message, system_prompt,
                     compressed_messages, db_session_factory, note_service,
-                    review_service, email_service, step_timeout, previous_results,
+                    review_service, email_service, ppt_service, step_timeout,
+                    previous_results,
                     attachment_content=attachment_content,
                 ):
                     await queue.put(event)
@@ -388,7 +433,8 @@ async def _execute_batch(
             async for event in _execute_step(
                 step, chat_model, user_id, user_message, system_prompt,
                 compressed_messages, db_session_factory, note_service,
-                review_service, email_service, step_timeout, previous_results,
+                review_service, email_service, ppt_service, step_timeout,
+                previous_results,
                 attachment_content=attachment_content,
             ):
                 yield event
@@ -466,6 +512,7 @@ async def execute_plan_agent(
     note_service=None,
     review_service=None,
     email_service=None,
+    ppt_service=None,
     timeout: int = 120,
     attachment_content: Optional[List[dict]] = None,
     attachment_names: Optional[List[str]] = None,
@@ -547,6 +594,7 @@ async def execute_plan_agent(
                     note_service=note_service,                 # 笔记服务实例
                     review_service=review_service,             # 回顾服务实例
                     email_service=email_service,               # 邮件发送服务实例
+                    ppt_service=ppt_service,                   # PPT 生成服务实例
                     config=config,                             # 配置字典
                     previous_results=previous_results,         # 已完成步骤结果
                     attachment_content=attachment_content,     # 附件多模态 blocks

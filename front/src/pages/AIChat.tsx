@@ -11,7 +11,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Send, Square, Plus, User, FileText, X, Search, Brain, Paperclip } from 'lucide-react';
+import { Send, Square, Plus, User, FileText, X, Search, Brain, Paperclip, Download, Loader2, Presentation } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -25,7 +25,9 @@ import { sessionsApi } from '../api/sessions';
 import { notesApi } from '../api/notes';
 import { endpoints } from '../api/endpoints';
 import { uploadChatFile, deleteChatFile } from '../api/chat';
-import type { ChatMessage, Note, AttachmentMeta } from '../types/api';
+import type { ChatMessage, Note, AttachmentMeta, ToolFileInfo } from '../types/api';
+import { pptTemplatesApi, type PptTemplateInfo } from '../api/pptTemplates';
+import client from '../api/client';
 import PlanProgressCard from '../components/chat/PlanProgressCard';
 import type { PlanStepData } from '../components/chat/PlanProgressCard';
 import AttachmentBar from '../components/chat/AttachmentBar';
@@ -37,6 +39,22 @@ const MAX_IMAGES_PER_MSG = 6;
 const MAX_VIDEOS_PER_MSG = 1;
 const MAX_IMAGE_MB = 10;
 const MAX_VIDEO_MB = 50;
+
+/** 工具名 → 中文展示名（简单路径补转发工具事件后的状态指示，§7） */
+const TOOL_NAME_MAP: Record<string, string> = {
+  generate_ppt_tool: '正在生成 PPT（约需 20~30 秒）…',
+  search_notes_tool: '正在搜索笔记…',
+  get_note_content_tool: '正在读取笔记内容…',
+  get_note_stats_tool: '正在统计笔记…',
+  get_today_reviews_tool: '正在获取待回顾笔记…',
+  mark_reviewed_tool: '正在标记回顾…',
+  create_note_tool: '正在创建笔记…',
+  update_note_tool: '正在更新笔记…',
+  get_related_notes_tool: '正在查找关联笔记…',
+  get_user_info_tools: '正在读取用户信息…',
+  send_email: '正在发送邮件…',
+  what_time_is_now: '正在获取时间…',
+};
 
 export default function AIChat() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -61,6 +79,13 @@ export default function AIChat() {
   const [loadingNotes, setLoadingNotes] = useState(false);
   const notePickerRef = useRef<HTMLDivElement>(null);
 
+  // PPT 模板选择状态（v1.4，设计方案 §6.5：与笔记一起选中，单选）
+  const [selectedTemplate, setSelectedTemplate] = useState<PptTemplateInfo | null>(null);
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false);
+  const [templateList, setTemplateList] = useState<PptTemplateInfo[]>([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const templatePickerRef = useRef<HTMLDivElement>(null);
+
   // 附件状态（上传预览条）
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -73,6 +98,8 @@ export default function AIChat() {
   const [planActive, setPlanActive] = useState(false);
   const [planComplete, setPlanComplete] = useState(false);
   const [currentTool, setCurrentTool] = useState('');
+  // PPT 生成完成信息（tool_file 事件，§7 下载卡片）
+  const [pptFile, setPptFile] = useState<ToolFileInfo | null>(null);
 
   // requestAnimationFrame 节流：合并高频 token 更新
   const rafRef = useRef<number | null>(null);
@@ -137,16 +164,21 @@ export default function AIChat() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  /** 点击外部关闭笔记选择面板 */
+  /** 点击外部关闭笔记/模板选择面板 */
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (notePickerRef.current && !notePickerRef.current.contains(e.target as Node)) {
         setShowNotePicker(false);
       }
+      if (templatePickerRef.current && !templatePickerRef.current.contains(e.target as Node)) {
+        setShowTemplatePicker(false);
+      }
     };
-    if (showNotePicker) document.addEventListener('mousedown', handleClickOutside);
+    if (showNotePicker || showTemplatePicker) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showNotePicker]);
+  }, [showNotePicker, showTemplatePicker]);
 
   /** 打开笔记选择面板时加载笔记列表 */
   const toggleNotePicker = async () => {
@@ -174,6 +206,29 @@ export default function AIChat() {
       if (exists) return prev.filter((n) => n.id !== note.id);
       return [...prev, note];
     });
+  };
+
+  /** 打开/关闭 PPT 模板选择面板（打开时懒加载模板列表） */
+  const toggleTemplatePicker = async () => {
+    if (!showTemplatePicker) {
+      setShowTemplatePicker(true);
+      setLoadingTemplates(true);
+      try {
+        const res = await pptTemplatesApi.list();
+        setTemplateList(res.data?.data?.templates ?? []);
+      } catch {
+        setTemplateList([]);
+      } finally {
+        setLoadingTemplates(false);
+      }
+    } else {
+      setShowTemplatePicker(false);
+    }
+  };
+
+  /** 切换模板选中状态（单选；再次点击取消） */
+  const toggleTemplate = (tmpl: PptTemplateInfo) => {
+    setSelectedTemplate((prev) => (prev?.id === tmpl.id ? null : tmpl));
   };
 
   /** 移除已引用的笔记 */
@@ -310,6 +365,10 @@ export default function AIChat() {
         .join('\n');
       messageText = `${input}\n\n---\n以下是用户引用的笔记内容，请结合这些内容回答：\n${noteContext}\n\n<referenced_notes>\n${noteRefBlock}\n</referenced_notes>`;
     }
+    // 附加用户选择的 PPT 模板（v1.4，§6.5：后端解析注入 system_prompt，LLM 填入工具参数）
+    if (selectedTemplate) {
+      messageText += `\n\n<ppt_template>\n- ID: ${selectedTemplate.id} | 名称: ${selectedTemplate.name}\n</ppt_template>`;
+    }
 
     // 乐观用户消息：附带附件元数据（气泡立即渲染，历史回显走后端附件数据）
     const userAttachments: AttachmentMeta[] = readyAttachments.map((a) => ({
@@ -336,6 +395,7 @@ export default function AIChat() {
     // 重置 Plan 状态
     setPlanGoal('');
     setPlanSteps([]);
+    setPptFile(null);
     setPlanTotalSteps(0);
     setPlanCompletedSteps(0);
     setPlanActive(false);
@@ -463,6 +523,10 @@ export default function AIChat() {
           onToolEnd: (_name) => {
             setCurrentTool('');
           },
+          // 工具产出文件事件（PPT 生成完成，§6.3 第 3 段）
+          onToolFile: (info) => {
+            setPptFile(info);
+          },
         }
       );
     } finally {
@@ -502,6 +566,67 @@ function MessageContent({ content }: { content: string }) {
       >
         {content}
       </ReactMarkdown>
+    </div>
+  );
+}
+
+/**
+ * PPT 下载卡片（tool_file 事件，§7 下载实现）
+ * 下载走 axios client（自动注入 JWT + 401 自动 refresh 重试，不能用 <a href>）
+ */
+function PptDownloadCard({ file }: { file: ToolFileInfo }) {
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownload = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      // 用 axios client 而非原生 fetch：
+      // ① 请求拦截器自动注入 JWT；② 401 自动 refresh 并重试（access token
+      // 30 分钟过期，原生 fetch 无此机制会导致过期后下载 401「缺少认证信息」）
+      const res = await client.get(file.download_url, { responseType: 'blob' });
+      const blob = res.data;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${file.title || '讲解PPT'}.pptx`;   // 文件名取自 tool_file 事件的 title
+      document.body.appendChild(a);
+      a.click();
+      URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 404) {
+        alert('文件已过期，请重新生成');
+      } else if (status === 401) {
+        alert('登录已过期，请重新登录');
+      } else {
+        alert(`下载失败(${status ?? '未知错误'})`);
+      }
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <div className="mt-2 flex items-center gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-accent-bg)] px-3 py-2">
+      <span className="text-lg" role="img" aria-label="PPT">📄</span>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-[var(--color-text)] truncate">
+          已生成讲解 PPT{file.slide_count ? `（${file.slide_count} 页）` : ''}
+        </p>
+        <p className="text-xs text-[var(--color-text-tertiary)] truncate">
+          {file.title || '讲解PPT'}
+        </p>
+      </div>
+      <button
+        onClick={handleDownload}
+        disabled={downloading}
+        className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-[var(--radius-md)] bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 disabled:opacity-50 transition-opacity"
+      >
+        <Download size={14} />
+        {downloading ? '下载中…' : '下载'}
+      </button>
     </div>
   );
 }
@@ -588,6 +713,17 @@ function MessageContent({ content }: { content: string }) {
               ) : (
                 <div className="text-sm whitespace-pre-wrap">{msg.content || '...'}</div>
               )}
+              {/* 工具调用状态指示（简单路径补转发工具事件后生效，§6.3/§7；中文名映射） */}
+              {msg.role === 'assistant' && msg === messages[messages.length - 1] && currentTool && (
+                <div className="mt-2 flex items-center gap-1.5 text-xs text-[var(--color-text-tertiary)]">
+                  <Loader2 size={12} className="animate-spin" />
+                  <span>{TOOL_NAME_MAP[currentTool] ?? currentTool}</span>
+                </div>
+              )}
+              {/* PPT 生成完成下载卡片（tool_file 事件，§7） */}
+              {msg.role === 'assistant' && msg === messages[messages.length - 1] && pptFile && (
+                <PptDownloadCard file={pptFile} />
+              )}
               {/* 用户消息附件渲染（图片缩略图 / 视频播放器，历史回显同样走这里） */}
               {msg.role === 'user' && msg.attachments && msg.attachments.length > 0 && (
                 <AttachmentViewer attachments={msg.attachments} />
@@ -658,6 +794,66 @@ function MessageContent({ content }: { content: string }) {
         >
           <FileText size={18} />
         </button>
+
+        {/* PPT 模板按钮（v1.4：与笔记一起选中，生成 PPT 时使用） */}
+        <button
+          onClick={toggleTemplatePicker}
+          className={`flex-shrink-0 px-3 py-2.5 rounded-[var(--radius-md)] border transition-colors ${
+            showTemplatePicker || selectedTemplate
+              ? 'border-[var(--color-accent)] text-[var(--color-accent)] bg-[var(--color-accent-bg)]'
+              : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-accent-bg)] hover:text-[var(--color-accent)]'
+          }`}
+          title="选择 PPT 模板"
+        >
+          <Presentation size={18} />
+        </button>
+
+        {/* PPT 模板选择面板（单选；懒加载模板列表） */}
+        {showTemplatePicker && (
+          <div
+            ref={templatePickerRef}
+            className="absolute bottom-full mb-2 left-0 w-72 max-h-64 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-card)] shadow-lg z-10 flex flex-col"
+          >
+            <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)]">
+              <Presentation size={14} className="text-[var(--color-text-tertiary)]" />
+              <span className="flex-1 text-sm text-[var(--color-text)]">选择 PPT 模板</span>
+              <button
+                onClick={() => setShowTemplatePicker(false)}
+                className="text-[var(--color-text-tertiary)] hover:text-[var(--color-text)]"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {loadingTemplates ? (
+                <div className="text-center py-6 text-sm text-[var(--color-text-tertiary)]">加载中...</div>
+              ) : templateList.length === 0 ? (
+                <div className="text-center py-6 text-sm text-[var(--color-text-tertiary)]">
+                  暂无模板，请先在「PPT 模板」页上传
+                </div>
+              ) : (
+                templateList.map((tmpl) => {
+                  const isSelected = selectedTemplate?.id === tmpl.id;
+                  return (
+                    <button
+                      key={tmpl.id}
+                      onClick={() => toggleTemplate(tmpl)}
+                      className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
+                        isSelected
+                          ? 'bg-[var(--color-accent-bg)] text-[var(--color-accent)]'
+                          : 'text-[var(--color-text)] hover:bg-[var(--color-accent-bg)]'
+                      }`}
+                    >
+                      <Presentation size={14} className="flex-shrink-0" />
+                      <span className="truncate">{tmpl.name}</span>
+                      {isSelected && <span className="ml-auto text-xs flex-shrink-0">✓</span>}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
 
         {/* 笔记选择面板 */}
         {showNotePicker && (
@@ -757,6 +953,19 @@ function MessageContent({ content }: { content: string }) {
               </button>
             </span>
           ))}
+        </div>
+      )}
+
+      {/* PPT 模板标签（v1.4，输入框下方） */}
+      {selectedTemplate && (
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          <span className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-[var(--radius-md)] bg-[var(--color-accent-bg)] text-[var(--color-accent)] border border-[var(--color-accent)]/20">
+            <Presentation size={12} />
+            <span className="max-w-[160px] truncate">模板：{selectedTemplate.name}</span>
+            <button onClick={() => setSelectedTemplate(null)} className="hover:opacity-70">
+              <X size={12} />
+            </button>
+          </span>
         </div>
       )}
     </div>

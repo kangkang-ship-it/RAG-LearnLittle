@@ -28,6 +28,36 @@ def _safe_str(value: Any, max_len: int = 500) -> str:
     return value[:max_len]
 
 
+def parse_tool_file_event(tool_name: str, tool_output: Any) -> Optional[Dict[str, Any]]:
+    """
+    检测 PPT 工具输出，构造 tool_file 事件（设计方案 §6.3 第 1 段）
+
+    Args:
+        tool_name: 工具名
+        tool_output: on_tool_end 的 data.output（工具返回值）
+
+    Returns:
+        {"type": "tool_file", "name": tool_name, **file_info}；
+        工具名不匹配 / 输出非 JSON / 无 file_id → None（跳过）
+
+    v1.6 修复：langgraph 1.x 的 on_tool_end data.output 是 **ToolMessage 对象**
+    而非原始字符串（内容在 .content），需先提取再解析——
+    否则 tool_file 事件永不产出（前端收不到下载卡片）。
+    """
+    if tool_name != "generate_ppt_tool" or not tool_output:
+        return None
+    try:
+        # ToolMessage → 提取 content（工具返回的原始字符串）
+        if hasattr(tool_output, "content"):
+            tool_output = tool_output.content
+        file_info = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
+        if isinstance(file_info, dict) and "file_id" in file_info:
+            return {"type": "tool_file", "name": tool_name, **file_info}
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass  # 工具返回了错误提示（非 JSON），跳过，LLM 会在文本里说明
+    return None
+
+
 async def run_agent_stream(
     agent,
     agent_input: Dict[str, Any],
@@ -125,6 +155,13 @@ async def run_agent_stream(
                         "success": True,
                     })
                     yield {"type": "tool_end", "name": tool_name, "duration_ms": duration}
+
+                    # ★ PPT 工具输出检测（§6.3 第 1 段）：额外产出 tool_file 事件
+                    # 工具返回的 JSON（file_id/download_url/slide_count/title）直通前端
+                    tool_file = parse_tool_file_event(
+                        tool_name, event["data"].get("output"))
+                    if tool_file:
+                        yield tool_file
 
                 # ---- 工具调用失败 ----
                 elif event_type == "on_tool_error":

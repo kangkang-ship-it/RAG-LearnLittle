@@ -37,6 +37,7 @@ class ChatRouteContext:
     note_service: Any = None
     review_service: Any = None
     email_service: Any = None
+    ppt_service: Any = None               # PPT 生成服务（§6.4 注入链路）
     attachment_content: list = field(default_factory=list)   # 多模态 content blocks
     attachment_names: Optional[list] = None                  # 附件文件名（Plan 摘要注入）
     react_timeout: int = 60               # ReAct 路径超时（上游传 LLM_STREAM_TIMEOUT）
@@ -76,6 +77,7 @@ async def react_events(ctx: ChatRouteContext, timeout: int) -> AsyncGenerator[di
         note_service=ctx.note_service,
         review_service=ctx.review_service,
         email_service=ctx.email_service,
+        ppt_service=ctx.ppt_service,
         timeout=timeout,
         attachment_content=ctx.attachment_content,
     ):
@@ -84,6 +86,11 @@ async def react_events(ctx: ChatRouteContext, timeout: int) -> AsyncGenerator[di
             yield event
             if event_type == "error":
                 return
+        # ★ 简单路径补转发工具事件（§6.3 第 2 段，行为变更提示见设计方案）：
+        # 此前连 tool_start/tool_end 都不转发，补上后简单对话中的工具状态
+        # （含 generate_ppt_tool 的生成进度）对前端可见
+        elif event_type in ("tool_start", "tool_end", "tool_file"):
+            yield event
         # stream_done 等其余事件不转发（与现状一致）
 
 
@@ -108,6 +115,7 @@ async def plan_events(
     forwarded = {
         "plan_start", "plan_step", "plan_step_start", "plan_step_end",
         "plan_synthesize", "plan_complete", "tool_start", "tool_end",
+        "tool_file",   # ★ 新增：PPT 生成事件（§6.3 第 2 段）
     }
     async for event in execute_plan_agent(
         chat_model=ctx.agent_model,
@@ -120,6 +128,7 @@ async def plan_events(
         note_service=ctx.note_service,
         review_service=ctx.review_service,
         email_service=ctx.email_service,
+        ppt_service=ctx.ppt_service,
         timeout=timeout,
         attachment_content=ctx.attachment_content,
         attachment_names=ctx.attachment_names,

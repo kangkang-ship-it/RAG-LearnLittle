@@ -1,7 +1,7 @@
 """
 Agent 工具集
 
-定义 Agent 可使用的 11 个异步工具：
+定义 Agent 可使用的 12 个异步工具：
 1. what_time_is_now - 获取当前时间
 2. get_user_info_tools - 获取当前用户基本信息（用户名、邮箱、ID）
 3. search_notes_tool - 语义搜索笔记（返回 200 字符摘要）
@@ -13,6 +13,7 @@ Agent 工具集
 9. update_note_tool - 更新已有笔记
 10. get_related_notes_tool - 获取关联推荐
 11. send_email - 发送邮件（笔记转 Markdown/PDF 附件发送到用户邮箱）
+12. generate_ppt_tool - 根据选中的笔记生成讲解 PPT（.pptx，设计方案 §4.1）
 """
 
 import re
@@ -61,6 +62,7 @@ def create_agent_tools(
     review_service=None,
     db_session_factory=None,
     email_service=None,
+    ppt_service=None,
     groups: Optional[List[str]] = None,
 ):
     """
@@ -76,6 +78,7 @@ def create_agent_tools(
         review_service: 回顾服务实例
         db_session_factory: 数据库会话工厂
         email_service: 邮件发送服务实例（send_email 工具使用）
+        ppt_service: PPT 生成服务实例（generate_ppt_tool 工具使用，§6.4）
         groups: 要加载的工具组名称列表（如 ["base", "note_read"]）。
                 None 表示加载全部工具。
 
@@ -399,6 +402,50 @@ def create_agent_tools(
             logger.error(f"邮件发送失败: to={to}, error={e}")
             return f"邮件发送失败：{e}。请检查邮箱地址是否正确，或稍后重试。"
 
+    @tool
+    async def generate_ppt_tool(
+        note_ids: str,          # 必填：笔记 ID，逗号分隔（如 "id1,id2,id3"），须来自用户引用的笔记
+        title: str = "",        # 可选：PPT 主题，默认由 LLM 根据笔记内容拟定
+        style: str = "business",  # 可选：风格预设 business / academic / minimal
+        template_id: str = "",  # 可选：用户选择的 PPT 模板 ID（<ppt_template> 内提供的），为空时用默认版式
+    ) -> str:
+        """
+        根据用户选中的一篇或多篇笔记，生成一份讲解用 PPT（.pptx 文件）。
+        适用场景：用户说「把这几篇笔记做成PPT / 生成讲解幻灯片 / 整理成演示文稿」。
+        注意：note_ids 必须是用户引用笔记中的 ID（<referenced_notes> 内提供的），
+        逗号分隔，可一次传入多篇，每篇笔记会生成独立的章节。
+        template_id 须来自用户消息中的 <ppt_template> 块，为空时按默认版式生成。
+        返回 JSON 字符串，包含 file_id、download_url、slide_count、title。
+        注意：生成成功后只需简短告知用户"PPT 已生成，点击下载卡片即可下载"，
+        不要重复输出 PPT 的大纲或详细内容。
+        """
+        if ppt_service is None:
+            return "PPT 服务未初始化，请稍后再试"
+        if note_service is None:
+            return "笔记服务未就绪，请稍后再试"
+        if db_session_factory is None:
+            return "数据库会话不可用，请稍后再试"
+
+        ids = [i.strip() for i in note_ids.split(",") if i.strip()]
+        if not ids:
+            return "未提供笔记 ID，请先选中要生成 PPT 的笔记"
+
+        try:
+            async with db_session_factory() as db:
+                return await ppt_service.generate(
+                    db=db,
+                    user_id=user_id,
+                    note_ids=ids,
+                    title=title,
+                    style=style,
+                    template_id=template_id,
+                    note_service=note_service,
+                )
+        except Exception as e:
+            # 捕获所有异常返回友好提示，防止异常冒泡导致 Agent 循环中断
+            logger.error(f"PPT 生成失败: user={user_id[:8]}, error={e}", exc_info=True)
+            return f"PPT 生成失败：{e}"
+
     # 全部工具注册表（名称 → 工具对象）
     all_tools = {
         "what_time_is_now": what_time_is_now,
@@ -412,6 +459,7 @@ def create_agent_tools(
         "update_note_tool": update_note_tool,
         "get_related_notes_tool": get_related_notes_tool,
         "send_email": send_email,
+        "generate_ppt_tool": generate_ppt_tool,
     }
 
     # ===== 工具组解析（P2-6 ToolRegistry）=====

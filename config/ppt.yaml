@@ -1,0 +1,35 @@
+# PPT 功能配置（唯一承载 PPT 功能参数，归属见设计方案 §8.2）
+ppt:
+  max_notes: 10                  # 单次生成最多笔记数
+  max_slides: 20                 # 大纲页数上限
+  per_note_chars: 2000           # 单篇笔记截断字符数（保留标题层级/列表/首段与结论）
+  total_context_chars: 12000     # 全部笔记合计截断字符数
+  outline_timeout: 45            # 大纲生成内部超时（秒）；实测 qwen3.8-max 长 JSON 生成约 25~45s
+  outline_retries: 1             # 大纲解析失败重试次数（LLM 响应慢不触发重试）
+  file_ttl_hours: 24             # 生成文件 TTL（小时），过期惰性清理
+  max_files_per_user: 20         # 每用户保留文件数上限，超限删最旧
+  engine: "python_pptx"          # 渲染引擎：python_pptx（Phase 3 支持 aspose_cloud）
+  max_template_size_mb: 10       # 模板单文件大小上限（MB，v1.4）
+  max_templates_per_user: 20     # 每用户模板数上限（v1.4）
+
+  # 风格主题预设（PythonPptxRenderer 使用，§5.3）
+  # 正文字体固定为微软雅黑（打开时本地渲染，无字体问题）
+  themes:
+    business:
+      primary: "1F4E79"          # 主色（深蓝）
+      secondary: "2E75B6"        # 辅色
+      background: "FFFFFF"       # 背景
+      title_font_size: 36        # 标题字号
+      body_font_size: 20         # 正文字号
+    academic:
+      primary: "7B4A12"          # 主色（棕）
+      secondary: "C55A11"
+      background: "FBF7F0"
+      title_font_size: 40
+      body_font_size: 20
+    minimal:
+      primary: "212121"          # 主色（黑）
+      secondary: "616161"
+      background: "FFFFFF"
+      title_font_size: 44
+      body_font_size: 22

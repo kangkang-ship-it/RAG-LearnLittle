@@ -8,7 +8,7 @@
  */
 
 import { useRef, useCallback } from 'react';
-import type { ChatSSEMessage, KnowledgeSSEMessage } from '../types/api';
+import type { ChatSSEMessage, KnowledgeSSEMessage, ToolFileInfo } from '../types/api';
 
 /** SSE 回调配置 */
 interface SSECallbacks {
@@ -33,6 +33,8 @@ interface SSECallbacks {
   // 工具调用事件回调
   onToolStart?: (name: string) => void;
   onToolEnd?: (name: string, durationMs?: number) => void;
+  /** 工具产出文件事件（PPT 生成完成，含下载信息，§6.3） */
+  onToolFile?: (info: ToolFileInfo) => void;
 }
 
 export function useSSE() {
@@ -166,6 +168,10 @@ export function useSSE() {
 
               case 'tool_end':
                 callbacks.onToolEnd?.(data.name || '', data.duration_ms);
+                break;
+
+              case 'tool_file':
+                callbacks.onToolFile?.(data as unknown as ToolFileInfo);
                 break;
             }
           } catch {

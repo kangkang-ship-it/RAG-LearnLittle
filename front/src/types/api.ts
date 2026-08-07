@@ -319,7 +319,7 @@ export interface ChatSSEMessage {
        | 'plan_start' | 'plan_step' | 'plan_step_start'
        | 'plan_step_end' | 'plan_synthesize' | 'plan_complete'
        | 'plan_fallback'
-       | 'tool_start' | 'tool_end';
+       | 'tool_start' | 'tool_end' | 'tool_file';
   stage?: string;
   content?: string;
   details?: Record<string, unknown>;
@@ -336,6 +336,20 @@ export interface ChatSSEMessage {
   // 工具调用字段
   name?: string;
   duration_ms?: number;
+  // tool_file 事件字段（PPT 生成完成，§6.3）
+  file_id?: string;
+  download_url?: string;
+  slide_count?: number;
+  title?: string;
+}
+
+/** tool_file 事件信息（PPT 下载卡片使用） */
+export interface ToolFileInfo {
+  name?: string;
+  file_id: string;
+  download_url: string;
+  slide_count?: number;
+  title?: string;
 }
 
 /** 知识库 SSE 消息 */

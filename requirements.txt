@@ -37,6 +37,8 @@ pillow>=11.0.0
 python-magic-bin>=0.4.14; sys_platform == "win32"
 # 视频抽帧（捆绑 ffmpeg 二进制；离线部署需预置 wheel）
 imageio-ffmpeg>=0.5.0
+# PPT 生成（讲解 PPT 工具，设计方案 §8.1）
+python-pptx>=1.0.0
 
 # ========== Token Counting ==========
 tiktoken>=0.7.0

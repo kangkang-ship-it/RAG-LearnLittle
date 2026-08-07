@@ -77,6 +77,7 @@ async def execute_agent(
     note_service=None,
     review_service=None,
     email_service=None,
+    ppt_service=None,
     timeout: int = 60,
     override_groups: Optional[List[str]] = None,
     attachment_content: Optional[List[dict]] = None,
@@ -96,6 +97,7 @@ async def execute_agent(
         note_service: 笔记服务实例（供笔记相关工具使用）
         review_service: 回顾服务实例（供回顾相关工具使用）
         email_service: 邮件发送服务实例（供 send_email 工具使用）
+        ppt_service: PPT 生成服务实例（供 generate_ppt_tool 工具使用，§6.4）
         timeout: 超时秒数
         override_groups: 直接指定工具组，跳过关键词路由（Plan-Execute 步骤使用）
         attachment_content: 附件多模态 content blocks（图片/视频帧），非空时
@@ -113,13 +115,14 @@ async def execute_agent(
     else:
         tool_groups = resolve_tool_groups(user_message)
 
-    # 2. 创建工具集（注入笔记服务、回顾服务、邮件服务 + 按需加载）
+    # 2. 创建工具集（注入笔记服务、回顾服务、邮件服务、PPT 服务 + 按需加载）
     tools = create_agent_tools(
         user_id=user_id,
         note_service=note_service,
         review_service=review_service,
         db_session_factory=db_session_factory,
         email_service=email_service,
+        ppt_service=ppt_service,
         groups=tool_groups,
     )
 
