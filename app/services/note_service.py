@@ -123,9 +123,47 @@ class NoteService:
         
         if not note:
             raise BusinessError(code=ErrorCode.NOTE_NOT_FOUND, http_status=404)
-        
+
         return note
-    
+
+    async def get_notes_by_ids(
+        self, db: AsyncSession, note_ids: List[str], user_id: str
+    ) -> List[Note]:
+        """
+        批量获取笔记（权限校验 + 已删除过滤，设计方案 §9.1）
+
+        与 get_note 不同：不抛 BusinessError —— 部分 ID 无效/不存在/无权限时
+        静默忽略，只返回「属于该用户且未删除」的有效子集，调用方按需提示。
+
+        保持输入顺序：SQL `IN()` 不保证返回顺序与输入一致（MySQL 通常按
+        主键索引顺序返回），必须在代码内按输入顺序重排——否则生成 PPT 时
+        章节顺序会与用户选择顺序不符。
+
+        Args:
+            db: 数据库会话
+            note_ids: 笔记 ID 列表
+            user_id: 当前用户 ID
+
+        Returns:
+            有效笔记列表（按 note_ids 输入顺序排列）
+        """
+        if not note_ids:
+            return []
+
+        result = await db.execute(
+            select(Note).where(
+                and_(
+                    Note.id.in_(note_ids),
+                    Note.user_id == user_id,
+                    Note.deleted_at.is_(None),
+                )
+            )
+        )
+        notes = list(result.scalars().all())
+        id_order = {nid: i for i, nid in enumerate(note_ids)}
+        notes.sort(key=lambda n: id_order.get(n.id, 999))   # 理论上不会出现未匹配项，兜底排最后
+        return notes
+
     async def list_notes(
         self, db: AsyncSession, user_id: str,
         page: int = 1, page_size: int = 20,

@@ -10,6 +10,7 @@ const en = {
   'nav.review': 'Daily Review',
   'nav.recycle_bin': 'Recycle Bin',
   'nav.knowledge': 'Knowledge Base',
+  'nav.ppt_templates': 'PPT Templates',
   'nav.profile': 'Profile',
   'nav.settings': 'Settings',
   'nav.about': 'About',

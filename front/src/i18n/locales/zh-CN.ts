@@ -10,6 +10,7 @@ const zh = {
   'nav.review': '每日回顾',
   'nav.recycle_bin': '回收站',
   'nav.knowledge': '知识库',
+  'nav.ppt_templates': 'PPT 模板',
   'nav.profile': '个人信息',
   'nav.settings': '设置',
   'nav.about': '关于',

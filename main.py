@@ -69,6 +69,18 @@ class BackgroundInitManager:
         except Exception as e:
             logger.warning(f"EmailService 初始化失败（邮件功能不可用）: {e}")
             self.email_service = None
+
+        # PptTemplateService + PptService：轻量对象（只读配置 + 目录初始化，
+        # 不持有模型，§6.4/§6.5），在 __init__ 中同步创建（失败仅告警，PPT 功能不可用）
+        try:
+            from app.services.ppt_service import PptService, load_ppt_config
+            from app.services.ppt_template_service import PptTemplateService
+            self.ppt_template_service = PptTemplateService(load_ppt_config())
+            self.ppt_service = PptService(load_ppt_config(), self.ppt_template_service)
+        except Exception as e:
+            logger.warning(f"PptService 初始化失败（PPT 功能不可用）: {e}")
+            self.ppt_service = None
+            self.ppt_template_service = None
     
     async def run(self):
         """
@@ -354,6 +366,8 @@ from app.routers import (
     review_router,
     note_template_router,
     usage,
+    ppt_router,
+    ppt_template_router,
 )
 
 # 健康检查（不需要认证）
@@ -369,6 +383,8 @@ app.include_router(knowledge_router.router, prefix=API_PREFIX, tags=["Knowledge"
 app.include_router(review_router.router, prefix=API_PREFIX, tags=["Review"])
 app.include_router(note_template_router.router, prefix=API_PREFIX, tags=["Note Template"])
 app.include_router(usage.router, prefix=API_PREFIX, tags=["Usage"])
+app.include_router(ppt_router.router, prefix=API_PREFIX, tags=["PPT"])
+app.include_router(ppt_template_router.router, prefix=API_PREFIX, tags=["PPT"])
 
 # 静态文件服务（头像访问）
 # 确保头像存储目录存在

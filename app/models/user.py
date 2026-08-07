@@ -73,6 +73,7 @@ class User(Base):
     chat_sessions = relationship("ChatSession", back_populates="user", cascade="all, delete-orphan")
     review_records = relationship("ReviewRecord", back_populates="user", cascade="all, delete-orphan")
     note_templates = relationship("NoteTemplate", back_populates="user", cascade="all, delete-orphan")
+    ppt_templates = relationship("PptTemplate", back_populates="user", cascade="all, delete-orphan")
     knowledge_documents = relationship("KnowledgeDocument", back_populates="user", cascade="all, delete-orphan")
     
     def __repr__(self) -> str:

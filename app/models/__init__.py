@@ -10,6 +10,7 @@ from app.models.note import Note
 from app.models.chat import ChatSession, ChatMessage
 from app.models.review import ReviewRecord
 from app.models.note_template import NoteTemplate
+from app.models.ppt_template import PptTemplate
 from app.models.knowledge import KnowledgeDocument
 from app.models.model_trace import ModelTrace, ModelPricing
 from app.models.tool_audit import ToolCallAudit

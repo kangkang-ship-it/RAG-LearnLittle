@@ -437,6 +437,22 @@ async def chat_query(
                 + "\n提示：当用户要求修改/更新/编辑这些笔记时，直接使用上述 ID 调用 update_note_tool，无需再次搜索。"
             )
             logger.info(f"解析到引用笔记: {len(ref_lines)} 篇")
+
+    # ===== 解析用户选择的 PPT 模板（v1.4，设计方案 §6.5）=====
+    # 与 <referenced_notes> 同段解析，注入 system_prompt 让 LLM 把 template_id
+    # 填入 generate_ppt_tool（工具内强校验归属，双保险）
+    ppt_template_text = ""
+    _pt_match = _re.search(r'<ppt_template>\s*(.*?)\s*</ppt_template>', data.message, _re.DOTALL)
+    if _pt_match:
+        pt_block = _pt_match.group(1).strip()
+        pt_lines = [l.strip() for l in pt_block.split('\n') if l.strip().startswith('- ID:')]
+        if pt_lines:
+            ppt_template_text = (
+                "\n\n## 用户当前选择的 PPT 模板（生成讲解 PPT 时使用）：\n"
+                + "\n".join(pt_lines)
+                + "\n提示：当用户要求生成讲解 PPT 时，将上述模板 ID 填入 generate_ppt_tool 的 template_id 参数。"
+            )
+            logger.info(f"解析到 PPT 模板选择: {len(pt_lines)} 个")
     
     # 构建 system_prompt（注入 RAG 上下文 + 引用笔记 ID）
     try:
@@ -456,6 +472,10 @@ async def chat_query(
     # 注入引用笔记 ID 到 system_prompt（让 Agent 知道可以直接操作的笔记）
     if referenced_notes_text:
         system_prompt += referenced_notes_text
+
+    # 注入 PPT 模板选择到 system_prompt（v1.4，§6.5）
+    if ppt_template_text:
+        system_prompt += ppt_template_text
     
     # ===== SSE 流式响应生成器 =====
     async def generate_stream():
@@ -521,6 +541,7 @@ async def chat_query(
                 note_service=note_service,
                 review_service=review_service,
                 email_service=init_manager.email_service,
+                ppt_service=getattr(init_manager, "ppt_service", None),
                 attachment_content=attachment_content,
                 attachment_names=attachment_names or None,
                 react_timeout=LLM_STREAM_TIMEOUT,

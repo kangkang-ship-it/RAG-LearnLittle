@@ -25,6 +25,16 @@ export const endpoints = {
     sessionRevoke: (deviceId: string) => `${API_PREFIX}/auth/sessions/${deviceId}`,
   },
 
+  // ========== PPT ==========
+  ppt: {
+    /** POST 上传 PPT 模板（multipart: file + name，设计方案 §6.5） */
+    templateUpload: `${API_PREFIX}/ppt-template/upload`,
+    /** GET 模板列表 */
+    templateBase: `${API_PREFIX}/ppt-template`,
+    /** DELETE 删除模板 */
+    templateDetail: (id: number) => `${API_PREFIX}/ppt-template/${id}`,
+  },
+
   // ========== 用户 ==========
   user: {
     me: `${API_PREFIX}/user/me`,

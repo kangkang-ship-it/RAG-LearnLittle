@@ -16,7 +16,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   FileText, MessageSquare, History, BookOpen, Library,
-  User, Settings, Info, LogOut, ChevronLeft, ChevronRight, Trash2,
+  User, Settings, Info, LogOut, ChevronLeft, ChevronRight, Trash2, Presentation,
 } from 'lucide-react';
 import { useUserStore } from '../../stores/useUserStore';
 import { authApi } from '../../api/auth';
@@ -35,6 +35,7 @@ const navItems = [
   { to: '/review', icon: BookOpen, labelKey: 'nav.review' },
   { to: '/recycle-bin', icon: Trash2, labelKey: 'nav.recycle_bin' },
   { to: '/knowledge', icon: Library, labelKey: 'nav.knowledge' },
+  { to: '/ppt-templates', icon: Presentation, labelKey: 'nav.ppt_templates' },
 ];
 
 const settingItems = [
