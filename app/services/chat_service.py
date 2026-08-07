@@ -19,13 +19,34 @@ from app.services.database_session_manager import DatabaseSessionManager
 class ChatService:
     """
     聊天业务代理层
-    
+
     职责：
     - 协调会话管理和消息持久化
     - 集成 RAG 查询结果
     - 处理会话标题自动生成逻辑
     """
-    
+
+    @staticmethod
+    def normalize_attachment(att) -> dict:
+        """清洗历史消息附件（兼容 tool_file 旧格式，v1.6）。
+
+        PPT 下载卡片持久化初版把原始 tool_file 事件直接存入 attachments_json
+        （缺 file_type/original_name/file_id），导致 MessageListResponse 校验失败
+        （历史对话 500）。读取与存量修复共用此函数。
+        """
+        if not isinstance(att, dict):
+            return att
+        att = dict(att)
+        if "file_type" not in att:
+            # 含 download_url → PPT 工具文件；否则按图片兜底（旧附件格式）
+            att["file_type"] = "ppt" if att.get("download_url") else "image"
+        if "original_name" not in att:
+            att["original_name"] = att.get("title") or "附件"
+        if "file_id" not in att:
+            att["file_id"] = (att.get("download_url") or "").rsplit("/", 1)[-1] \
+                or f"legacy-{abs(hash(str(att))) % 10 ** 8}"
+        return att
+
     def __init__(self, session_manager: Optional[DatabaseSessionManager] = None):
         """
         初始化聊天服务

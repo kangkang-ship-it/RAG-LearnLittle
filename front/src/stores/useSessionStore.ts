@@ -28,8 +28,8 @@ interface SessionState {
   setLastSessionId: (sessionId: string | null) => void;
   /** 追加一条消息 */
   addMessage: (message: ChatMessage) => void;
-  /** 设置消息列表 */
-  setMessages: (messages: ChatMessage[]) => void;
+  /** 设置消息列表（支持函数式更新，v1.6：tool_file 挂载用） */
+  setMessages: (messages: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
   /** 更新最后一条 AI 消息内容（SSE 流式追加） */
   updateLastAssistantMessage: (content: string) => void;
   /** 设置加载状态 */
@@ -56,7 +56,13 @@ export const useSessionStore = create<SessionState>()((set) => ({
   addMessage: (message) =>
     set((state) => ({ messages: [...state.messages, message] })),
 
-  setMessages: (messages) => set({ messages }),
+  setMessages: (messages) =>
+    set((state) => ({
+      messages:
+        typeof messages === 'function'
+          ? (messages as (prev: ChatMessage[]) => ChatMessage[])(state.messages)
+          : messages,
+    })),
 
   updateLastAssistantMessage: (content) =>
     set((state) => {

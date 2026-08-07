@@ -41,15 +41,23 @@ class RAGRequest(BaseModel):
 
 
 class AttachmentMeta(BaseModel):
-    """聊天附件元数据（消息回显，对应 chat_messages.attachments_json）"""
+    """聊天附件元数据（消息回显，对应 chat_messages.attachments_json）
+
+    v1.6：file_type 增加 "ppt"——PPT 下载信息随 assistant 消息持久化，
+    历史回放从消息附件恢复下载卡片（设计方案 §7）。
+    """
     file_id: str
-    file_type: Literal["image", "video"]
+    file_type: Literal["image", "video", "ppt"]
     original_name: str
     file_size: Optional[int] = None
     mime_type: Optional[str] = None
     width: Optional[int] = None
     height: Optional[int] = None
     duration_sec: Optional[float] = None
+    # PPT 工具文件（file_type="ppt" 时）
+    download_url: Optional[str] = None
+    title: Optional[str] = None
+    slide_count: Optional[int] = None
 
 
 class UploadResponse(BaseModel):

@@ -171,13 +171,17 @@ export interface BatchOperation {
 /** 聊天附件元数据（对应后端 AttachmentMeta） */
 export interface AttachmentMeta {
   file_id: string;
-  file_type: 'image' | 'video';
+  file_type: 'image' | 'video' | 'ppt';
   original_name: string;
   file_size?: number;
   mime_type?: string;
   width?: number;
   height?: number;
   duration_sec?: number | null;
+  // PPT 工具文件（file_type='ppt' 时）：随消息持久化，历史回放恢复下载卡片
+  download_url?: string;
+  title?: string;
+  slide_count?: number;
 }
 
 /** 附件上传响应（对应后端 UploadResponse） */

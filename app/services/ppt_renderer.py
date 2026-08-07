@@ -104,65 +104,448 @@ class PythonPptxRenderer:
     def _render_with_template(
         self, template_path: str, outline: PPTOutline, theme: str
     ) -> bytes:
-        """v1 模板有限支持（§5.6，Phase 1.5 已实施并通过 spike 验证）。
+        """模板渲染四级降级链（§5.6 扩展）：
 
-        机制：
-        - 模板幻灯片按**名称**匹配版式类型：cover / agenda / section / content / summary
-          （用户给模板幻灯片命名，如 "cover"）；未命名/缺失的类型 → 该页退回默认版式
-        - 匹配到 → 复制该页（保留母版/版式/形状样式）+ {{key}} 占位符替换：
-          标量 {{title}}/{{subtitle}}/{{date}} 行内替换（保留首个 run 格式）；
-          列表 {{bullets}}/{{items}}/{{code}} 按项复制段落（继承段落格式）
-        - 输出保持模板页面尺寸（不强制 16:9，尊重用户模板）
-        - 模板中无任何命名版式页 → 抛 ValueError，由 render() 降级默认版式（三档兜底第 2 档）
+        T1 命名页+占位符（精确模式）：模板含 cover/agenda/... 命名页 → 复制+{{key}} 填充
+        T2 内容覆盖（识别+替换）：无命名页但含可识别文本 → 保留每页布局，
+           识别标题/正文框并覆盖为新内容（用户「按我的模板生成」的常规路径）
+        T3 母版优先（设计语言继承）：无文本或识别失败 → 保留模板母版/版式，
+           用模板版式新建标准讲解页（背景/配色/字体/母版 logo 仍生效）
+        → 模板文件损坏（Presentation 打不开）由 render() 外层兜底默认版式；
+        → 各层内部失败逐级降级（T2 失败 → T3；T3 失败 → 默认版式）
         """
         src = Presentation(template_path)
+
+        # ---- T1: 命名页匹配（现有逻辑，最精确） ----
         patterns: dict = {}
         for slide in src.slides:
             name = (slide._element.cSld.get("name") or "").strip().lower()
             if name in ("cover", "agenda", "section", "content", "summary"):
                 patterns[name] = slide
-        if not patterns:
-            raise ValueError("模板中未找到命名版式页（cover/agenda/section/content/summary）")
+        if patterns:
+            return self._render_named_templates(src, patterns, outline, theme)
 
-        out = Presentation()
-        out.slide_width = src.slide_width    # 保持模板尺寸
-        out.slide_height = src.slide_height
-        colors = self._theme_colors(theme)
-        blank = out.slide_layouts[6]
+        # ---- T2: 内容覆盖（模板含可识别文本时） ----
+        if self._has_any_text(src):
+            try:
+                return self._render_by_overlay(src, outline, theme)
+            except Exception as e:
+                logger.warning(f"T2 内容覆盖失败，降级 T3 母版优先: {e}")
 
-        for s in self._expanded_slides(outline):
-            pattern = patterns.get(s.type)
-            if pattern is None:
-                # 该页类型模板缺失 → 退回默认版式（三档兜底第 3 档）
-                logger.debug(f"模板缺失 {s.type} 版式页，该页退回默认版式")
-                self._render_slide(out, blank, s, colors, outline)
-                continue
-            slide = self._copy_slide(out, pattern)
-            self._fill_placeholders(slide, self._outline_slide_mapping(s))
-            if s.notes:
-                slide.notes_slide.notes_text_frame.text = s.notes
+        # ---- T3: 母版优先（设计语言继承） ----
+        try:
+            return self._render_master_only(src, outline, theme)
+        except Exception as e:
+            logger.warning(f"T3 母版优先失败，降级默认版式: {e}")
+            raise
 
-        buffer = io.BytesIO()
-        out.save(buffer)
-        return buffer.getvalue()
-
-    # ========== 模板渲染工具 ==========
+    # ========== 页重建（T1/T2 共用：原地修改模板，主题/母版/版式/背景全保留） ==========
 
     @staticmethod
-    def _copy_slide(prs, src_slide):
-        """复制模板幻灯片到目标演示文稿。
+    def _sld_id_for(src, slide):
+        """通过 rId 找到 slide 对应的 sldId 元素（sldIdLst 与 slides 每次迭代包装不同）"""
+        for sldId in src.slides._sldIdLst:
+            rid = sldId.get(qn("r:id"))
+            if rid:
+                try:
+                    if src.part.related_part(rid) is slide.part:
+                        return sldId
+                except Exception:
+                    pass
+        return None
 
-        使用目标自身的 blank 版式（复用源演示文稿的版式会导致
-        layout/theme 文件重复名冲突）；形状 XML 自带样式，母版/主题色
-        继承为 v1 能力边界（§5.6）。
+    def _rebuild_slides(self, src, plan, outline: PPTOutline, theme: str) -> bytes:
+        """按 plan 原地重建模板幻灯片（v1.6 修复：主题色失效）。
+
+        plan: List[(PPTSlide, Optional[src_slide])]
+            - (outline 页, 使用的模板页)：已原地覆盖内容，保留该页
+            - (outline 页, None)：该页用标准讲解页（新建，基于模板版式）
+        流程：新建缺失页 → 重排 sldIdLst 按 outline 顺序 → 保存。
+        未在 plan 中的模板页（多余页）自动丢弃。
         """
-        new_slide = prs.slides.add_slide(prs.slide_layouts[6])
-        # 删除新页自带的版式占位符（避免与复制的形状叠加）
+        layout = self._pick_content_layout(src)
+        colors = self._theme_colors(theme)
+        sldIdLst = src.slides._sldIdLst
+
+        ordered = []
+        for s, page in plan:
+            if page is None:
+                slide = src.slides.add_slide(layout)
+                self._render_slide(src, layout, s, colors, outline)
+                ordered.append(sldIdLst[-1])
+            else:
+                sld_id = self._sld_id_for(src, page)
+                if sld_id is not None:
+                    ordered.append(sld_id)
+                else:
+                    # 异常兜底：模板页丢失 → 标准页
+                    slide = src.slides.add_slide(layout)
+                    self._render_slide(src, layout, s, colors, outline)
+                    ordered.append(sldIdLst[-1])
+
+        # 重排 sldIdLst 为 outline 顺序；
+        # 未使用的模板页：drop_rel 移除其 part 引用（否则残留 part 打包时文件名冲突）
+        keep = {id(el) for el in ordered}
+        for el in list(sldIdLst):
+            rid = el.get(qn("r:id"))
+            if id(el) not in keep and rid:
+                try:
+                    src.part.drop_rel(rid)
+                except Exception:
+                    pass
+            sldIdLst.remove(el)
+        for el in ordered:
+            sldIdLst.append(el)
+
+        buffer = io.BytesIO()
+        src.save(buffer)
+        return buffer.getvalue()
+
+    # ========== T1: 命名页 + 占位符（精确模式） ==========
+
+    @staticmethod
+    def _clone_slide_in_place(prs, src_slide):
+        """同演示文稿内复制幻灯片（保留主题/版式——跨文件复制会丢主题色）。
+
+        用于命名页被多个 outline 页复用（如模板仅 1 个 content 页、大纲 3 个 content 页）。
+        """
+        new_slide = prs.slides.add_slide(src_slide.slide_layout)
         for shape in list(new_slide.shapes):
             shape._element.getparent().remove(shape._element)
         for shape in src_slide.shapes:
             new_slide.shapes._spTree.append(copy.deepcopy(shape._element))
+        if src_slide.has_notes_slide:
+            notes_text = src_slide.notes_slide.notes_text_frame.text
+            if notes_text.strip():
+                new_slide.notes_slide.notes_text_frame.text = notes_text
         return new_slide
+
+    def _render_named_templates(
+        self, src, patterns: dict, outline: PPTOutline, theme: str
+    ) -> bytes:
+        """T1：模板幻灯片按**名称**匹配版式类型，命名页原地填充 {{key}} 占位符；
+        命名页被多个大纲页复用时，同文件复制（保留主题色）"""
+        used: set = set()
+        plan = []
+        for s in self._expanded_slides(outline):
+            pattern = patterns.get(s.type)
+            if pattern is None:
+                # 该页类型模板缺失 → 标准讲解页
+                logger.debug(f"模板缺失 {s.type} 版式页，该页用标准版式")
+                plan.append((s, None))
+                continue
+            if pattern in used:
+                pattern = self._clone_slide_in_place(src, pattern)
+            else:
+                used.add(pattern)
+            # 原地填充（模板主题/母版/背景保留）
+            self._fill_placeholders(pattern, self._outline_slide_mapping(s))
+            if s.notes:
+                pattern.notes_slide.notes_text_frame.text = s.notes
+            plan.append((s, pattern))
+        return self._rebuild_slides(src, plan, outline, theme)
+
+    # ========== T2: 内容覆盖（识别 + 替换） ==========
+
+    @staticmethod
+    def _has_any_text(src) -> bool:
+        """模板是否有可识别文本（无 → T2 不适用，直接 T3）"""
+        for slide in src.slides:
+            for shape in slide.shapes:
+                if shape.has_text_frame and shape.text_frame.text.strip():
+                    return True
+        return False
+
+    @staticmethod
+    def _shape_text(shape) -> str:
+        """形状完整文本（多段落 \n 连接）"""
+        if not shape.has_text_frame:
+            return ""
+        return "\n".join(p.text for p in shape.text_frame.paragraphs)
+
+    @staticmethod
+    def _max_font_size(shape) -> float:
+        """形状内最大 run/段落字号（pt）；无显式字号返回 0"""
+        if not shape.has_text_frame:
+            return 0.0
+        sizes = []
+        for p in shape.text_frame.paragraphs:
+            for r in p.runs:
+                if r.font.size is not None:
+                    sizes.append(r.font.size.pt)
+            if p.font.size is not None:
+                sizes.append(p.font.size.pt)
+        return max(sizes) if sizes else 0.0
+
+    @staticmethod
+    def _is_title_placeholder(shape) -> bool:
+        """版式角色：标题占位符（placeholder idx==0）——最准的标题信号（T2 规则①）"""
+        try:
+            return bool(shape.is_placeholder) and shape.placeholder_format.idx == 0
+        except Exception:
+            return False
+
+    @staticmethod
+    def _shape_top_in(shape, slide_h: float) -> float:
+        """形状顶部 Y 坐标（英寸）；读取失败返回页高（视为底部）"""
+        try:
+            return shape.top / 914400.0
+        except Exception:
+            return slide_h
+
+    def _identify_title_frame(self, slide, slide_h: float):
+        """识别主标题框（T2 定稿规则）：
+        ① 角色优先：标题占位符（idx==0）→ 直接命中
+        ② 无占位符 → 视觉得分 = 字号 + 位置(上30%加权) + Z序(靠前加权)
+           排除：文本>60字符 / 纯数字编号(如"01") / 字号<14pt / 底部10%区域
+        """
+        for shape in slide.shapes:
+            if self._is_title_placeholder(shape):
+                return shape
+        candidates = []
+        for idx, shape in enumerate(slide.shapes):
+            text = self._shape_text(shape).strip()
+            if not text:
+                continue
+            # spike 修复：排除纯数字/编号文本（章节大编号"01"常比真标题字号大）
+            if re.fullmatch(r"\d{1,3}", text):
+                continue
+            size = self._max_font_size(shape)
+            if len(text) > 60 or (size and size < 14):
+                continue
+            top = self._shape_top_in(shape, slide_h)
+            if top > slide_h * 0.9:
+                continue
+            score = (size if size else 18) \
+                + (12 if top < slide_h * 0.3 else 0) \
+                + (5 if idx < 10 else 0)
+            candidates.append((score, shape))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda x: -x[0])
+        return candidates[0][1]
+
+    def _identify_subtitle_frame(self, slide, title_frame, slide_h: float):
+        """识别副标题框：主标题下方 0.5 英寸内、字号最大的框（T2 定稿）"""
+        if title_frame is None:
+            return None
+        try:
+            title_bottom = (title_frame.top + title_frame.height) / 914400.0
+        except Exception:
+            return None
+        best, best_score = None, -1.0
+        for shape in slide.shapes:
+            if shape._element is title_frame._element or not shape.has_text_frame:
+                continue
+            text = self._shape_text(shape).strip()
+            if not text or len(text) > 60:
+                continue
+            top = self._shape_top_in(shape, slide_h)
+            if abs(top - title_bottom) > 0.5:
+                continue
+            size = self._max_font_size(shape)
+            if size > best_score:
+                best, best_score = shape, size
+        return best
+
+    def _identify_body_frames(self, slide, title_frame, slide_h: float) -> list:
+        """识别正文框：剩余有文本框 − 页脚(底部10%) − 短文本(1-5字,非上半区) − 图注(<10pt)。
+
+        spike 修复：用 _element 引用比较排除标题框（slide.shapes 每次迭代
+        返回不同包装实例，`shape is title_frame` 恒为 False）。
+        """
+        title_el = title_frame._element if title_frame is not None else None
+        bodies = []
+        for shape in slide.shapes:
+            if shape._element is title_el or not shape.has_text_frame:
+                continue
+            text = self._shape_text(shape).strip()
+            if not text:
+                continue
+            top = self._shape_top_in(shape, slide_h)
+            if top > slide_h * 0.9:
+                continue  # 页脚/页码区
+            if 1 <= len(text) <= 5 and top >= slide_h * 0.3:
+                continue  # 短文本且不在上半区（页码/角标/装饰）
+            size = self._max_font_size(shape)
+            if size and size < 10:
+                continue  # 图注/小字说明
+            bodies.append(shape)
+        return bodies
+
+    @staticmethod
+    def _para_is_bullet(p) -> bool:
+        """段落是否有项目符号标记（buChar/buAutoNum）"""
+        pPr = p._p.find(qn("a:pPr"))
+        if pPr is None:
+            return False
+        return (pPr.find(qn("a:buChar")) is not None
+                or pPr.find(qn("a:buAutoNum")) is not None)
+
+    def _split_bullets(self, shape) -> List[str]:
+        """把形状文本拆成 bullets（T2 定稿）：
+        段落有项目符号或段落短(<60字) → 拆成多条；长段落 → 保留为一条
+        """
+        tf = shape.text_frame
+        parts = []
+        for p in tf.paragraphs:
+            text = p.text.strip()
+            if not text:
+                continue
+            if self._para_is_bullet(p) or len(text) < 60:
+                parts.append(text)
+            else:
+                parts.append(text)  # 长段落保留结构（不强行拆分）
+        return parts
+
+    def _overlay_texts(self, shape, values: List[str]) -> None:
+        """覆盖形状文本（T2）：保留首个段落格式；
+        单值直接替换并清空多余段落；多值按段落展开"""
+        tf = shape.text_frame
+        paras = list(tf.paragraphs)
+        if not paras:
+            return
+        first_p = paras[0]
+        if len(values) == 1:
+            self._set_para_text(first_p._p, values[0])
+            for p in paras[1:]:
+                p._p.getparent().remove(p._p)
+        elif values:
+            for p in paras[1:]:
+                p._p.getparent().remove(p._p)
+            self._expand_paragraph(first_p, values)
+
+    def _overlay_outline_slide(
+        self, slide, s: PPTSlide, title_frame, slide_h: float
+    ) -> bool:
+        """按大纲页类型覆盖识别出的框（T2）：
+        标题 → title；副标题 → subtitle（cover/section）；正文 → bullets/items。
+        spike 调优：
+        - content/summary 正文框 ≥ 4 个（卡片/复杂布局）→ 返回 False，
+          由调用方降级 T3 标准页（多卡片无法可靠填充，不破坏布局）
+        - agenda 目录卡片：每框填一个 item（保留卡片布局）
+        - 其余正文框清空（避免残留模板示例文本）
+        """
+        # 标题
+        self._overlay_texts(title_frame, [_clean_markdown(s.title)])
+        # 副标题（cover / section）
+        if s.subtitle:
+            sub = self._identify_subtitle_frame(slide, title_frame, slide_h)
+            if sub is not None:
+                self._overlay_texts(sub, [_clean_markdown(s.subtitle)])
+        # 正文
+        bodies = self._identify_body_frames(slide, title_frame, slide_h)
+        if not bodies:
+            return True
+
+        if s.type == "agenda":
+            # 目录卡片：每框填一个 item（框多而 items 少时多余框清空）
+            items = list(s.items or [])
+            for i, body in enumerate(bodies):
+                if i < len(items):
+                    self._overlay_texts(body, [_clean_markdown(items[i])])
+                else:
+                    self._overlay_texts(body, [""])
+            return True
+
+        if s.type in ("content", "summary", "section"):
+            if len(bodies) >= 4:
+                # 复杂卡片布局无法可靠填充（含页序错配：section 对上了内容卡页）
+                # → 该页降级 T3 标准页
+                logger.debug(f"页含 {len(bodies)} 个正文框（复杂布局），降级标准版式")
+                return False
+            values = [_clean_markdown(b) for b in (s.bullets or [])]
+            if values:
+                self._overlay_texts(bodies[0], values)
+            for extra in bodies[1:]:
+                self._overlay_texts(extra, [""])
+        # section / cover：仅标题（正文保留设计，不填）
+        return True
+
+    def _render_by_overlay(
+        self, src, outline: PPTOutline, theme: str
+    ) -> bytes:
+        """T2 内容覆盖（识别+替换）：在模板页上**原地**覆盖文本，
+        主题/母版/背景完整保留（v1.6 修复：复制到新演示文稿会丢失主题色）。
+
+        页映射：outline 首页 → 模板第 1 页；outline 末页 → 模板末页；
+        中间按序对应；模板页不足 / 无法识别标题 / 复杂布局 → 该页标准讲解页。
+        """
+        slide_h = src.slide_height / 914400.0
+        src_slides = list(src.slides)
+        outline_slides = list(self._expanded_slides(outline))
+        n_src, n_out = len(src_slides), len(outline_slides)
+
+        plan = []
+        for i, s in enumerate(outline_slides):
+            # 页映射（v1 顺序对应）
+            if i == 0:
+                src_idx = 0
+            elif i == n_out - 1 and n_src > 1 and n_out > 1:
+                src_idx = n_src - 1
+            else:
+                src_idx = i
+            if src_idx >= n_src:
+                plan.append((s, None))
+                continue
+            page = src_slides[src_idx]
+            title_frame = self._identify_title_frame(page, slide_h)
+            if title_frame is None:
+                # 无法识别标题 → 该页标准讲解页（不猜错）
+                logger.debug(f"模板第 {src_idx + 1} 页无法识别标题，该页用标准版式")
+                plan.append((s, None))
+                continue
+            if not self._overlay_outline_slide(page, s, title_frame, slide_h):
+                # 复杂布局无法可靠填充 → 该页标准讲解页
+                plan.append((s, None))
+                continue
+            if s.notes:
+                page.notes_slide.notes_text_frame.text = s.notes
+            plan.append((s, page))
+
+        return self._rebuild_slides(src, plan, outline, theme)
+
+    # ========== T3: 母版优先（设计语言继承） ==========
+
+    @staticmethod
+    def _pick_content_layout(prs):
+        """选含标题+正文占位符的版式（Title+Content 类），fallback 最后一个版式"""
+        for layout in prs.slide_layouts:
+            idxs = [ph.placeholder_format.idx for ph in layout.placeholders]
+            if 0 in idxs and 1 in idxs:
+                return layout
+        return prs.slide_layouts[-1] if prs.slide_layouts else None
+
+    @staticmethod
+    def _drop_last_slide(prs) -> None:
+        """删除演示文稿最后一页（含 slide part，避免保存时文件重名）"""
+        sldIdLst = prs.slides._sldIdLst
+        if not len(sldIdLst):
+            return
+        sldId = sldIdLst[-1]
+        rId = sldId.get(qn("r:id"))
+        if rId:
+            prs.part.drop_rel(rId)
+        sldIdLst.remove(sldId)
+
+    def _render_master_only(
+        self, src, outline: PPTOutline, theme: str
+    ) -> bytes:
+        """T3 母版优先：删除模板内容页（母版/版式保留），
+        用模板版式新建标准讲解页——背景/配色/字体/母版 logo 全部来自模板"""
+        # 删除模板全部幻灯片（含 part，避免保存时 Duplicate name；masters/layouts 保留）
+        while len(src.slides._sldIdLst):
+            self._drop_last_slide(src)
+        layout = self._pick_content_layout(src)
+        colors = self._theme_colors(theme)
+        for s in self._expanded_slides(outline):
+            self._render_slide(src, layout, s, colors, outline)
+
+        buffer = io.BytesIO()
+        src.save(buffer)
+        return buffer.getvalue()
+
+    # ========== 模板渲染工具 ==========
 
     @staticmethod
     def _outline_slide_mapping(s: PPTSlide) -> dict:
@@ -288,6 +671,11 @@ class PythonPptxRenderer:
 
     def _render_slide(self, prs, blank, s: PPTSlide, colors: dict, outline: PPTOutline):
         slide = prs.slides.add_slide(blank)
+        # 清除版式自带的占位符形状（否则「单击此处添加标题」等提示文字
+        # 会与 add_textbox 的正文图层叠加，形成重影——v1.6 修复）
+        for shape in list(slide.shapes):
+            if shape.is_placeholder:
+                shape._element.getparent().remove(shape._element)
 
         if s.type == "cover":
             # 上半部主色带 + 大标题 + 副标题 + 日期

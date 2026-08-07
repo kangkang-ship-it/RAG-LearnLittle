@@ -25,7 +25,7 @@ import { sessionsApi } from '../api/sessions';
 import { notesApi } from '../api/notes';
 import { endpoints } from '../api/endpoints';
 import { uploadChatFile, deleteChatFile } from '../api/chat';
-import type { ChatMessage, Note, AttachmentMeta, ToolFileInfo } from '../types/api';
+import type { ChatMessage, Note, AttachmentMeta } from '../types/api';
 import { pptTemplatesApi, type PptTemplateInfo } from '../api/pptTemplates';
 import client from '../api/client';
 import PlanProgressCard from '../components/chat/PlanProgressCard';
@@ -99,7 +99,8 @@ export default function AIChat() {
   const [planComplete, setPlanComplete] = useState(false);
   const [currentTool, setCurrentTool] = useState('');
   // PPT 生成完成信息（tool_file 事件，§7 下载卡片）
-  const [pptFile, setPptFile] = useState<ToolFileInfo | null>(null);
+  // PPT 下载卡片（v1.6：不再用独立 state——tool_file 随消息 attachments 持久化，
+  // 历史回放从消息附件恢复卡片，切换模块后不消失）
 
   // requestAnimationFrame 节流：合并高频 token 更新
   const rafRef = useRef<number | null>(null);
@@ -395,7 +396,6 @@ export default function AIChat() {
     // 重置 Plan 状态
     setPlanGoal('');
     setPlanSteps([]);
-    setPptFile(null);
     setPlanTotalSteps(0);
     setPlanCompletedSteps(0);
     setPlanActive(false);
@@ -525,7 +525,24 @@ export default function AIChat() {
           },
           // 工具产出文件事件（PPT 生成完成，§6.3 第 3 段）
           onToolFile: (info) => {
-            setPptFile(info);
+            // 挂到最后一条 assistant 消息的 attachments（与历史回放统一渲染源；
+            // 后端保存时同样写入 attachments_json，切换页面后卡片可恢复）
+            setMessages((prev) => {
+              if (prev.length === 0) return prev;
+              const last = prev[prev.length - 1];
+              const pptMeta: AttachmentMeta = {
+                file_id: info.file_id,
+                file_type: 'ppt',
+                original_name: info.title || '讲解PPT',
+                download_url: info.download_url,
+                title: info.title,
+                slide_count: info.slide_count,
+              };
+              return [
+                ...prev.slice(0, -1),
+                { ...last, attachments: [...(last.attachments || []), pptMeta] },
+              ];
+            });
           },
         }
       );
@@ -574,7 +591,7 @@ function MessageContent({ content }: { content: string }) {
  * PPT 下载卡片（tool_file 事件，§7 下载实现）
  * 下载走 axios client（自动注入 JWT + 401 自动 refresh 重试，不能用 <a href>）
  */
-function PptDownloadCard({ file }: { file: ToolFileInfo }) {
+function PptDownloadCard({ file }: { file: { download_url?: string; title?: string; slide_count?: number } }) {
   const [downloading, setDownloading] = useState(false);
 
   const handleDownload = async () => {
@@ -584,7 +601,7 @@ function PptDownloadCard({ file }: { file: ToolFileInfo }) {
       // 用 axios client 而非原生 fetch：
       // ① 请求拦截器自动注入 JWT；② 401 自动 refresh 并重试（access token
       // 30 分钟过期，原生 fetch 无此机制会导致过期后下载 401「缺少认证信息」）
-      const res = await client.get(file.download_url, { responseType: 'blob' });
+      const res = await client.get(file.download_url ?? '', { responseType: 'blob' });
       const blob = res.data;
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -709,7 +726,20 @@ function PptDownloadCard({ file }: { file: ToolFileInfo }) {
                 </div>
               )}
               {msg.role === 'assistant' ? (
-                <MessageContent content={msg.content || '...'} />
+                // v1.6：生成完成且含 PPT 卡片时，冗长过程文本折叠为「查看生成过程」
+                // （生成中仍实时显示；避免「校验报告+设计稿+结果」平铺刷屏）
+                msg.attachments?.some((a) => a.file_type === 'ppt') && !isStreaming ? (
+                  <details className="group">
+                    <summary className="cursor-pointer select-none text-xs text-[var(--color-text-tertiary)] hover:text-[var(--color-accent)]">
+                      查看生成过程
+                    </summary>
+                    <div className="mt-2">
+                      <MessageContent content={msg.content || '...'} />
+                    </div>
+                  </details>
+                ) : (
+                  <MessageContent content={msg.content || '...'} />
+                )
               ) : (
                 <div className="text-sm whitespace-pre-wrap">{msg.content || '...'}</div>
               )}
@@ -720,9 +750,9 @@ function PptDownloadCard({ file }: { file: ToolFileInfo }) {
                   <span>{TOOL_NAME_MAP[currentTool] ?? currentTool}</span>
                 </div>
               )}
-              {/* PPT 生成完成下载卡片（tool_file 事件，§7） */}
-              {msg.role === 'assistant' && msg === messages[messages.length - 1] && pptFile && (
-                <PptDownloadCard file={pptFile} />
+              {/* PPT 生成完成下载卡片（v1.6：从消息 attachments 渲染——流式挂载与历史回放同源，切换模块不消失） */}
+              {msg.attachments?.find((a) => a.file_type === 'ppt') && (
+                <PptDownloadCard file={msg.attachments.find((a) => a.file_type === 'ppt')!} />
               )}
               {/* 用户消息附件渲染（图片缩略图 / 视频播放器，历史回显同样走这里） */}
               {msg.role === 'user' && msg.attachments && msg.attachments.length > 0 && (

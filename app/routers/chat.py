@@ -551,23 +551,37 @@ async def chat_query(
             # 执行 + 事件转发（error 后不发 done、不保存回复，与改造前一致）
             accumulated = ""
             errored = False
+            ppt_file_info = None   # tool_file 事件（持久化到消息附件，历史回放恢复下载卡片）
             async for event in stream_chat_graph(ctx):
                 if event.get("type") == "response":
                     accumulated += event.get("content", "")
                 elif event.get("type") == "error":
                     errored = True
+                elif event.get("type") == "tool_file":
+                    # 补全 AttachmentMeta 必填字段（file_type/original_name），
+                    # 否则历史接口 MessageListResponse 校验 500（v1.6 修复）
+                    ppt_file_info = {
+                        "file_id": event.get("file_id"),
+                        "file_type": "ppt",
+                        "original_name": event.get("title") or "讲解PPT",
+                        "download_url": event.get("download_url"),
+                        "title": event.get("title"),
+                        "slide_count": event.get("slide_count"),
+                    }
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
             if errored:
                 # 与现状一致：error 事件后不发送 done、不保存回复
                 return
-            
+
             # 异步保存 AI 回复到数据库 + Redis（非阻塞，不延迟 done 事件）
             # 回复保存成功后回填附件 message_id（绑定消息，禁止单独删除）
             if accumulated:
                 async def _save_reply_and_bind():
                     await chat_service.save_message_with_commit(
-                        session_id, user_id, "assistant", accumulated
+                        session_id, user_id, "assistant", accumulated,
+                        # PPT 下载信息随消息持久化（复用 attachments_json，切换页面后下载卡片仍可恢复）
+                        attachments_json=[ppt_file_info] if ppt_file_info else None,
                     )
                     if user_msg_id and attachments:
                         try:
@@ -842,11 +856,19 @@ async def get_messages(
         messages, has_more = await session_manager.get_messages(
             db, session_id, user_id, cursor=cursor, limit=limit
         )
-    
+
+    # 兼容 tool_file 旧格式附件（缺 file_type/original_name），
+    # 防止历史消息校验失败（v1.6 修复：读取时清洗，不依赖存量数据已被修复）
+    for msg in messages:
+        if msg.attachments_json:
+            msg.attachments_json = [
+                chat_service.normalize_attachment(a) for a in msg.attachments_json
+            ]
+
     next_cursor = None
     if has_more and messages:
         next_cursor = messages[0].created_at.isoformat()
-    
+
     return success_response(data=MessageListResponse(
         messages=messages,
         has_more=has_more,
