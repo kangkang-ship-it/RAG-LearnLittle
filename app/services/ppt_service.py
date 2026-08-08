@@ -141,10 +141,10 @@ class PptService:
         # ④ 生成结构化大纲（JSON mode；内部超时 + 解析失败重试 + 纯文本降级）
         outline = await self._generate_outline(context, title, style, notes)
 
-        # ⑤ 渲染引擎生成 .pptx 字节流（同步库 → 线程池，§5.5）
-        from app.services.ppt_renderer import PythonPptxRenderer
+        # ⑤ 渲染引擎生成 .pptx 字节流（同步库 → 线程池，§5.5；引擎由 PPT_ENGINE 切换，§8.3）
+        from app.services.ppt_renderer import create_renderer
 
-        renderer = PythonPptxRenderer(self.config)
+        renderer = create_renderer(self.config)
         pptx_bytes = await asyncio.to_thread(
             renderer.render, outline, theme=style, template_path=template_path)
 

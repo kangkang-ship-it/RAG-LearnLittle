@@ -287,7 +287,15 @@ async def _execute_step(
                 )
 
     step_context = "\n".join(step_context_parts)
-    step_system_prompt = system_prompt + f"\n\n---\n当前执行步骤上下文：\n{step_context}"
+    step_system_prompt = (
+        system_prompt
+        + f"\n\n---\n当前执行步骤上下文：\n{step_context}"
+        + "\n\n步骤执行规则（必须遵守）：\n"
+        + "1. 只完成当前步骤的任务，不要回答用户的完整问题（完整回答由综合阶段生成）；\n"
+        + "2. 步骤结果只输出本步骤需要的数据（如搜索结果、笔记内容、统计数字），\n"
+        + "   不要输出'未找到/已找到'等过程性叙述；\n"
+        + "3. 搜索无结果时，步骤结果只写'未找到相关笔记'，不要从自身知识补充大段内容。"
+    )
 
     if step.tool and step.tool != "none":
         # 需要工具调用 → 使用 ReAct Agent
@@ -301,7 +309,11 @@ async def _execute_step(
             async for event in execute_agent(
                 chat_model=chat_model,
                 user_id=user_id,
-                user_message=f"{user_message}\n\n请重点完成：{step.action}",
+                # 只给步骤 Agent 精简背景（截断），避免其针对完整问题输出完整回答
+                user_message=(
+                    f"用户请求（背景）：{user_message[:200]}\n\n"
+                    f"你的任务（只完成这一步，不要回答完整问题）：{step.action}"
+                ),
                 system_prompt=step_system_prompt,
                 compressed_messages=compressed_messages,
                 db_session_factory=db_session_factory,
@@ -315,13 +327,18 @@ async def _execute_step(
             ):
                 event_type = event.get("type", "")
                 if event_type == "response":
+                    # 步骤输出是内部中间结果：只累计供 Synthesize 汇总，
+                    # 不直接透传（否则每个步骤都会把完整回答流式输出给用户，
+                    # 造成重复内容与 token 浪费）
                     accumulated += event.get("content", "")
                 elif event_type == "error":
                     yield event
                     step.result = f"步骤 {step.step} 执行出错"
                     return
-                # 透传所有事件（response / tool_start / tool_end / thinking）
-                yield event
+                elif event_type in ("tool_start", "tool_end", "tool_file", "thinking"):
+                    # 仅透传进度类事件（工具状态/PPT 下载卡片对用户可见）
+                    yield event
+                # stream_done 等其余事件不转发（步骤内部信息不外泄）
 
             step.result = accumulated[:500] if accumulated else f"步骤 {step.step} 完成"
 
@@ -330,27 +347,29 @@ async def _execute_step(
             step.result = f"步骤 {step.step} 执行失败: {str(e)}"
             yield {"type": "response", "content": f"\n[步骤 {step.step} 执行异常: {str(e)}]\n"}
     else:
-        # 不需要工具 → 直接 LLM 流式生成（替代原来的 ainvoke 一次性输出）
+        # 不需要工具 → 直接 LLM 生成（输出仅作为内部步骤结果，不透传，
+        # 最终回答由 Synthesize 阶段统一生成）
         try:
             messages = list(compressed_messages or [])
+            step_prompt = (
+                f"用户请求（背景）：{user_message[:200]}\n\n"
+                f"你的任务（只完成这一步，不要回答完整问题）：{step.action}"
+            )
             if attachment_content:
                 content = [{
                     "type": "text",
-                    "text": f"{user_message}\n\n请完成以下步骤：{step.action}",
+                    "text": step_prompt,
                 }]
                 content.extend(attachment_content)
                 messages.append(HumanMessage(content=content))
             else:
-                messages.append(HumanMessage(
-                    content=f"{user_message}\n\n请完成以下步骤：{step.action}"
-                ))
+                messages.append(HumanMessage(content=step_prompt))
 
             accumulated = ""
             async with asyncio.timeout(step_timeout):
                 async for chunk in chat_model.astream(messages):
                     if hasattr(chunk, "content") and chunk.content:
                         accumulated += chunk.content
-                        yield {"type": "response", "content": chunk.content}
 
             step.result = accumulated[:500] if accumulated else f"步骤 {step.step} 完成"
 
@@ -445,6 +464,46 @@ async def _execute_batch(
 # Phase 3: Synthesize（综合阶段）
 # ============================================================
 
+def _dedupe_step_results(step_results: List[tuple]) -> List[tuple]:
+    """
+    步骤结果代码级去重（修复：Plan-Execute 重复输出问题）
+
+    多个步骤 Agent 可能各自输出相同的大段内容（如都复述了完整回答），
+    去重后再交给 Synthesize，避免最终回答重复。策略：
+    1. 归一化（去空白/换行）后完全相同的只保留首次出现的；
+    2. 文本存在包含关系时只保留较长者（较短者通常为重复片段/过程性碎片）。
+
+    Args:
+        step_results: [(PlanStep, result_text), ...]（保持计划步骤顺序）
+
+    Returns:
+        去重后的 [(PlanStep, result_text), ...]（保留原步骤对象与顺序）
+    """
+    kept: List[tuple] = []          # 已保留的 (step, result_text)
+    kept_norms: List[str] = []      # 对应归一化文本
+
+    for step, result_text in step_results:
+        norm = "".join(result_text.split())
+        if not norm:
+            continue
+
+        dup_idx = None
+        for j, kept_norm in enumerate(kept_norms):
+            if norm == kept_norm or norm in kept_norm or kept_norm in norm:
+                dup_idx = j
+                break
+
+        if dup_idx is None:
+            kept.append((step, result_text))
+            kept_norms.append(norm)
+        elif len(norm) > len(kept_norms[dup_idx]):
+            # 当前文本更长 → 替换已保留的较短碎片
+            kept[dup_idx] = (step, result_text)
+            kept_norms[dup_idx] = norm
+
+    return kept
+
+
 async def _synthesize(
     chat_model,
     plan: ExecutionPlan,
@@ -462,11 +521,14 @@ async def _synthesize(
 
     synthesize_timeout = config.get("synthesize_timeout", 60)  # 与 agent.yaml 对齐（P2-1 技术债务）
 
-    # 构建步骤结果摘要
+    # 构建步骤结果摘要（先代码级去重：多个步骤可能输出相同的大段内容，
+    # 重复交给 Synthesize 会导致最终回答重复——修复：重复输出问题）
     plan_summary = plan.goal
+    deduped = _dedupe_step_results([
+        (step, results.get(step.step, "无结果")) for step in plan.steps
+    ])
     step_results_parts = []
-    for step in plan.steps:
-        result_text = results.get(step.step, "无结果")
+    for step, result_text in deduped:
         step_results_parts.append(f"步骤 {step.step}（{step.action}）：{result_text[:300]}")
     step_results_text = "\n\n".join(step_results_parts)
 

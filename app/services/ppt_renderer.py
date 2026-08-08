@@ -17,6 +17,7 @@ Phase 3 可选实现：AsposeCloudRenderer（模板渲染模式完整支持）�
 """
 import copy
 import io
+import os
 import re
 from datetime import datetime
 from typing import List, Optional, Protocol
@@ -64,6 +65,20 @@ class PPTRenderer(Protocol):
         self, outline: PPTOutline, theme: str,
         template_path: Optional[str] = None,
     ) -> bytes: ...
+
+
+def create_renderer(config: Optional[dict] = None) -> PPTRenderer:
+    """渲染引擎工厂（§8.3）：PPT_ENGINE=aspose_cloud 时用 Aspose，默认 python_pptx。
+
+    AsposeCloudRenderer 内部对无占位符模板/失败场景自动降级本地，
+    业务代码（PptService）无感知。
+    """
+    engine = os.getenv("PPT_ENGINE", "python_pptx")
+    if engine == "aspose_cloud":
+        from app.services.ppt_renderer_aspose import AsposeCloudRenderer
+
+        return AsposeCloudRenderer(config)
+    return PythonPptxRenderer(config)
 
 
 class PythonPptxRenderer:
@@ -225,7 +240,9 @@ class PythonPptxRenderer:
     ) -> bytes:
         """T1：模板幻灯片按**名称**匹配版式类型，命名页原地填充 {{key}} 占位符；
         命名页被多个大纲页复用时，同文件复制（保留主题色）"""
-        used: set = set()
+        # 用 list 而非 set：python-pptx Slide 对象不可哈希（定义了 __eq__）
+        # set 成员测试会抛 "unhashable type: 'Slide'"（v1.6 修复）
+        used: list = []
         plan = []
         for s in self._expanded_slides(outline):
             pattern = patterns.get(s.type)
@@ -237,7 +254,7 @@ class PythonPptxRenderer:
             if pattern in used:
                 pattern = self._clone_slide_in_place(src, pattern)
             else:
-                used.add(pattern)
+                used.append(pattern)
             # 原地填充（模板主题/母版/背景保留）
             self._fill_placeholders(pattern, self._outline_slide_mapping(s))
             if s.notes:
@@ -476,6 +493,9 @@ class PythonPptxRenderer:
         outline_slides = list(self._expanded_slides(outline))
         n_src, n_out = len(src_slides), len(outline_slides)
 
+        # 已使用的模板页索引（页映射冲突保护：模板页数 < 大纲页数时，
+        # 末页映射与中间页可能撞同一模板页 → 冲突页用标准版式，避免 sldId 重复丢页）
+        used_idx: set = set()
         plan = []
         for i, s in enumerate(outline_slides):
             # 页映射（v1 顺序对应）
@@ -485,9 +505,15 @@ class PythonPptxRenderer:
                 src_idx = n_src - 1
             else:
                 src_idx = i
-            if src_idx >= n_src:
+            if src_idx >= n_src or src_idx in used_idx:
+                # 模板页不足 / 页映射冲突 → 该页标准讲解页
+                if src_idx >= n_src:
+                    logger.debug(f"模板页不足（大纲第 {i + 1} 页），该页用标准版式")
+                else:
+                    logger.debug(f"模板第 {src_idx + 1} 页已被占用（页映射冲突），该页用标准版式")
                 plan.append((s, None))
                 continue
+            used_idx.add(src_idx)
             page = src_slides[src_idx]
             title_frame = self._identify_title_frame(page, slide_h)
             if title_frame is None:

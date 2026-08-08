@@ -42,7 +42,7 @@ const MAX_VIDEO_MB = 50;
 
 /** 工具名 → 中文展示名（简单路径补转发工具事件后的状态指示，§7） */
 const TOOL_NAME_MAP: Record<string, string> = {
-  generate_ppt_tool: '正在生成 PPT（约需 20~30 秒）…',
+  generate_ppt_tool: '正在生成 PPT（约需 1~2 分钟，Aspose 云端渲染较慢）…',
   search_notes_tool: '正在搜索笔记…',
   get_note_content_tool: '正在读取笔记内容…',
   get_note_stats_tool: '正在统计笔记…',
@@ -369,6 +369,9 @@ export default function AIChat() {
     // 附加用户选择的 PPT 模板（v1.4，§6.5：后端解析注入 system_prompt，LLM 填入工具参数）
     if (selectedTemplate) {
       messageText += `\n\n<ppt_template>\n- ID: ${selectedTemplate.id} | 名称: ${selectedTemplate.name}\n</ppt_template>`;
+      // 发送后清除模板选择（模板是一次性使用，避免「没选模板却用了旧模板」的困惑；
+      // 与笔记选择保留策略不同）
+      setSelectedTemplate(null);
     }
 
     // 乐观用户消息：附带附件元数据（气泡立即渲染，历史回显走后端附件数据）

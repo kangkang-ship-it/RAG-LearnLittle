@@ -14,7 +14,7 @@ plan_execute:
   # Plan 阶段
   max_steps: 5                    # 计划最多步骤数
   plan_timeout: 30                # Plan 生成超时（秒），轻量模型建议 30s+
-  step_timeout: 90                # 单步执行超时（秒），复杂步骤建议 60s+
+  step_timeout: 180               # 单步执行超时（秒）；PPT 工具含 Aspose 云端渲染约 80~100s（实测），需 ≥120s
   synthesize_timeout: 60          # 综合阶段超时（秒）
   total_timeout: 300              # 总超时（秒），多步骤任务需要更长时间
   # 并行执行
