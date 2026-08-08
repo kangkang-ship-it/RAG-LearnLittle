@@ -1,6 +1,6 @@
 # AI Agent 升级补全实施方案
 
-> 版本：v1.0 ｜ 日期：2026-08-05 ｜ 状态：P2-4 ✅、P2-2 ✅、P2-3 ✅、P2-5 ✅ 已完成（2026-08-05），其余待实施
+> 版本：v1.0 ｜ 日期：2026-08-05 ｜ 状态：**全部 6 项 P2 已完成**（P2-4/2-2/2-3/2-5 ✅ 2026-08-05；P2-6 ✅、P2-1 ✅ 2026-08-06）
 >
 > 上游文档：[AI Agent架构评估与演进建议.md](./AI%20Agent架构评估与演进建议.md)（v1.1）§4 P2 建议 + 技术债务清单。
 > 本方案把 6 项 P2 建议展开为可执行实施方案，并将 4 条技术债务并入对应 P2 项（见文末附表），不新增孤立工作项。
@@ -287,15 +287,17 @@ classifier:
 
 **建议**：先做 B（一行注释/配置澄清，随本项顺手完成），A 作为独立优化项，启动前先用 golden 验证关键词召回率。本实施方案按 B 基线编写。
 
+> ✅ 已执行（2026-08-06）：`agent.yaml` email 组注释已修正为与实际配置一致（全量加载 + 提示词约束），矛盾消除。
+
 ### 6.3 设计
 
 1. **ToolRegistry**（`app/ai_service/tool_registry.py` 新）：
    - `register_group(name, tools)` / `get_group(name)` / `resolve(groups) -> List[Tool]` / `list_all()`
    - 启动时注册内置 5 组（数据仍来自 `agent.yaml` `tool_groups` 段，`create_agent_tools` 改为按 registry 组装，行为不变）
    - 工具名冲突检测：注册时重复名直接报错
-2. **MCP 适配**（预留，细节以 [docs/MCP工具接入可行性分析与改造方案.md](./MCP工具接入可行性分析与改造方案.md) 为准）：
-   - `agent.yaml` 新增 `mcp` 段（server 名 → url/command）；启动时连接、拉取工具元数据（name/description/inputSchema），经适配层（langchain_mcp_adapters 或自研）转换为 registry 可注册的 Tool
-   - 故障隔离：MCP server 连接失败只告警不阻断主链路，相关工具组标记不可用
+2. **MCP 适配**（预留，边界与命名以 [docs/MCP工具接入可行性分析与改造方案.md](./MCP工具接入可行性分析与改造方案.md) 为准）：
+   - ✅ 本项已交付：`ToolRegistry.register_tool` 动态注册机制 + 组自动创建 + 冲突检测 + 未注册工具跳过不阻断（故障隔离）；`agent.yaml` 的 `mcp_servers` 配置段与 `mcp_manager.py` 客户端生命周期由 MCP 专项方案 **Phase 1** 落地，使用本注册表注册
+   - MCP server 连接失败只告警不阻断主链路（registry 侧已具备：未注册工具仅告警跳过）
 3. **默认组配置修正**（6.2 方案 B）：同步修正 `agent.yaml` 注释，消除「注释说按需、配置是全量」的矛盾
 
 ### 6.4 涉及文件
