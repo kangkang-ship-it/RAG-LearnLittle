@@ -124,6 +124,11 @@ def init_tool_registry() -> None:
         for name in names:
             if not tool_registry.is_registered(name):
                 tool_registry.register_builtin(name, {"group": group})
+    # 无条件注册空 mcp 组：MCP server 全部未启用/连接失败时，消除
+    # create_agent_tools 每轮的 "工具组 'mcp' 未在 agent.yaml 中定义" warning
+    # （实施文档 §5.4 日志噪音消除方案；MCP 工具注册时 register_tool 会直接挂到此组）
+    if "mcp" not in tool_registry.all_groups():
+        tool_registry.register_group("mcp", [])
     logger.info(
         f"工具注册表初始化完成: {len(tool_registry._groups)} 组 / "
         f"{len(tool_registry._builtin_meta)} 个内置工具"

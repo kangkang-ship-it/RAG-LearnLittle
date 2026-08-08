@@ -81,6 +81,10 @@ class BackgroundInitManager:
             logger.warning(f"PptService 初始化失败（PPT 功能不可用）: {e}")
             self.ppt_service = None
             self.ppt_template_service = None
+
+        # MCP 客户端：无状态对象（配置 + 已注册工具），__init__ 中引用即可；
+        # 真正的子进程拉起在 init_mcp()（独立后台任务）中执行
+        self.mcp_manager = None
     
     async def run(self):
         """
@@ -194,7 +198,7 @@ class BackgroundInitManager:
             from app.rag.vector_store import VectorStoreService
             from app.rag.rag_service import RagService
             from app.utils.config import get_rag_config
-            
+
             vector_store = VectorStoreService()
             rag_config = get_rag_config()
             self.rag_service = RagService(
@@ -206,6 +210,28 @@ class BackgroundInitManager:
             logger.info("RagService 实例创建成功")
         except Exception as e:
             logger.warning(f"RagService 创建失败: {e}")
+
+    async def init_mcp(self):
+        """
+        初始化 MCP 工具（独立后台任务，与模型加载并行，互不阻塞）
+
+        任一 MCP Server 失败仅降级跳过（实施文档 §7 风险 #5），
+        不影响 Agent 主流程与其他初始化阶段。
+        """
+        try:
+            from app.ai_service.mcp_manager import mcp_manager
+            self.mcp_manager = mcp_manager
+            await mcp_manager.start()
+        except Exception as e:
+            logger.error(f"MCP 工具初始化失败（联网搜索/网页抓取不可用）: {e}")
+
+    async def close_mcp(self):
+        """关闭 MCP 客户端（应用关闭阶段调用，幂等）"""
+        if self.mcp_manager is not None:
+            try:
+                await self.mcp_manager.close()
+            except Exception as e:
+                logger.warning(f"MCP 客户端关闭异常: {e}")
 
 
 # 全局后台初始化管理器
@@ -251,6 +277,9 @@ async def lifespan(app: FastAPI):
     # 5. 后台异步初始化重型资源
     asyncio.create_task(init_manager.run())
 
+    # 5.1 后台初始化 MCP 工具（独立任务，与模型加载并行；失败仅降级，不影响主流程）
+    asyncio.create_task(init_manager.init_mcp())
+
     # 6. 启动定时任务（reload 模式跳过，避免 uvicorn fork 子进程导致重复执行）
     reload = os.getenv("UVICORN_RELOAD", "true").lower() not in ("false", "0", "no")
     if not reload:
@@ -266,6 +295,8 @@ async def lifespan(app: FastAPI):
 
     # ===== 关闭阶段 =====
     logger.info("应用关闭中...")
+    # 关闭 MCP 客户端（0.3.x 无持久连接，close 为幂等清理）
+    await init_manager.close_mcp()
     # 关闭定时任务调度器（wait=False 避免阻塞关闭流程）
     if not reload:
         from app.core.scheduler import shutdown_scheduler

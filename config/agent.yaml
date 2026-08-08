@@ -140,6 +140,7 @@ tool_routing:
     - note_write
     - review
     - email
+    - mcp           # MCP 动态工具组（tool_registry 自动创建，实施文档 §5.2）
   # 关键词 → 工具组映射（命中后追加对应组）
   keyword_rules:
     note_write:
@@ -211,6 +212,28 @@ tool_routing:
       - "生成ppt"
       - "讲解ppt"
       - "整理成ppt"
+
+# MCP 动态工具配置（MCP 专项方案 Part A；工具注册进 tool_registry 的 "mcp" 组）
+mcp_servers:
+  # #1 Tavily：联网搜索 + URL 内容提取（Phase 1 必接）
+  # 实测暴露 5 个工具，tools_include 白名单仅启用搜索与 URL 提取（实施文档 §3.1/§7 #3）
+  tavily:
+    transport: "stdio"
+    command: "npx"
+    args: ["-y", "tavily-mcp@latest"]
+    env:
+      TAVILY_API_KEY: "${TAVILY_API_KEY}"
+    tools_include: ["tavily_search", "tavily_extract"]
+    enabled: true
+
+  # #2 Fetch：通用网页抓取（Phase 1 必接）
+  # 必须固定 mcp<2 —— mcp-server-fetch 2026.7.10 与 mcp SDK 2.x 不兼容
+  # （2.x 移除了 mcp.shared.exceptions.McpError，不固定时启动即 ImportError，实测 2026-08-08）
+  fetch:
+    transport: "stdio"
+    command: "uvx"
+    args: ["--with", "mcp<2", "mcp-server-fetch"]
+    enabled: true
 
 # 安全配置（P2-3 安全护栏）
 security:

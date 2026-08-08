@@ -183,6 +183,18 @@ def get_tool_routing_config() -> dict:
     return load_yaml("agent.yaml").get("tool_routing", {})
 
 
+def get_mcp_servers_config() -> dict:
+    """
+    获取 MCP Server 配置（agent.yaml mcp_servers 段，MCP 专项方案 Part A）
+
+    Returns:
+        MCP 服务器配置字典，例:
+        {"tavily": {"transport": "stdio", "command": "npx", "args": [...],
+                    "env": {...}, "tools_include": [...], "enabled": true}}
+    """
+    return load_yaml("agent.yaml").get("mcp_servers", {})
+
+
 def get_pricing_config() -> dict:
     """
     获取模型定价配置（config/pricing.yaml）

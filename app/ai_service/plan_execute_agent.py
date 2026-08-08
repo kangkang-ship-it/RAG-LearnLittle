@@ -18,6 +18,7 @@ from typing import AsyncGenerator, Dict, Any, List, Optional
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
+from app.ai_service.tool_registry import tool_registry
 from app.core.logger_handler import logger
 from app.utils.config import get_plan_execute_config, get_tool_groups_config
 
@@ -80,10 +81,30 @@ def _build_plan_tool_list() -> str:
         for name in tools:
             if name not in names:
                 names.append(name)
+    # 追加 MCP 动态工具名（若已注册）：planner 感知外部能力工具（联网搜索/网页抓取），
+    # 可规划 tool="tavily_search" 等步骤（实施文档 §5.2 gap #1 闭合）
+    for name in tool_registry.resolve_names(["mcp"]):
+        if name not in names:
+            names.append(name)
     return "\n".join(
-        f"{i + 1}. {name} - {_PLAN_TOOL_DESC.get(name, '可用工具')}"
+        f"{i + 1}. {name} - {_plan_tool_desc(name)}"
         for i, name in enumerate(names)
     )
+
+
+def _plan_tool_desc(name: str) -> str:
+    """
+    工具描述：内置工具查静态表；MCP 动态工具取 tool 对象 description（截断防膨胀）
+    """
+    desc = _PLAN_TOOL_DESC.get(name)
+    if desc:
+        return desc
+    dyn = tool_registry.get_dynamic(name)
+    if dyn is not None:
+        desc = getattr(dyn, "description", None)
+        if desc:
+            return str(desc)[:150]
+    return "可用工具"
 
 
 async def _generate_plan(
@@ -237,13 +258,23 @@ def _resolve_step_tool_groups(step: PlanStep) -> Optional[List[str]]:
     matched_groups = ["base"]  # 始终包含基础组
     group = tool_to_group.get(step.tool)
     if group is None:
-        # 工具名未匹配到任何组（如模型输出了未知工具名）→ 回退关键词路由，
-        # 由 execute_agent 按 default_groups（全量）加载，避免步骤无工具可用
+        # 工具名未匹配内置组：若为已注册的 MCP 动态工具 → 返回 base + mcp；
+        # 否则回退关键词路由（全量组），由 execute_agent 按 default_groups 加载，
+        # 避免步骤无工具可用（实施文档 §5.2 gap #2）
+        if step.tool in tool_registry.resolve_names(["mcp"]):
+            logger.debug(f"步骤 {step.step} 工具 '{step.tool}' 命中 MCP 动态工具 → 工具组 ['base', 'mcp']")
+            return matched_groups + ["mcp"]
         logger.warning(f"步骤 {step.step} 工具 '{step.tool}' 未匹配到任何工具组，回退关键词路由（全量组）")
         return None
     elif group != "base" and group not in matched_groups:
         matched_groups.append(group)
         logger.debug(f"步骤 {step.step} 工具路由: tool='{step.tool}' → 工具组 {matched_groups}")
+
+    # MCP 动态工具组：步骤执行始终携带已注册的 MCP 工具（实施文档 §5.2 gap #2 闭合；
+    # 未注册时 resolve_names(["mcp"]) 返回空列表，无副作用）
+    if tool_registry.resolve_names(["mcp"]):
+        matched_groups.append("mcp")
+        logger.debug(f"步骤 {step.step} 工具路由: 追加 MCP 动态工具组 → {matched_groups}")
 
     return matched_groups
 
