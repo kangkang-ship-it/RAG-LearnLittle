@@ -16,6 +16,7 @@ import os
 import time
 import hashlib
 import threading
+from collections import OrderedDict
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.core.logger_handler import logger
@@ -25,17 +26,22 @@ from app.utils.config import get_chroma_config
 class VectorStoreService:
     """
     向量存储服务（线程安全单例）
-    
+
     使用双重检查锁定模式确保 ChromaDB 只有一个实例，
     避免多实例导致的并发写入冲突。
-    
+
+    ⚠️ 单例状态规范（生产风险分析·风险1）：本类是进程级全局单例，
+    所有用户的请求共享同一实例。**禁止在实例上存储请求级状态**——
+    Embedding 缓存为内容寻址（key=文本 MD5，相同文本 → 相同嵌入），
+    跨用户命中不构成数据泄漏；新增字段前必须确认其语义与 user_id 无关。
+
     核心功能：
     - 管理两个 ChromaDB Collection：rag_collection（知识库）+ notes_collection（笔记）
     - 提供混合检索能力（BM25 + 向量 EnsembleRetriever）
     - 根据查询特征动态调整检索权重
     - RAG 路由决策（判断是否需要走 RAG 管线）
     """
-    
+
     # DashScope Embedding API 单次请求最大条数
     EMBEDDING_BATCH_SIZE = 20
     
@@ -69,9 +75,12 @@ class VectorStoreService:
         self._notes_collection = None
         
         # Embedding 缓存：{text_hash: (embedding, timestamp)}
-        self._embedding_cache: Dict[str, Tuple[List[float], float]] = {}
-        self._embedding_cache_ttl = 300  # 5 分钟 TTL
-        
+        # 内容寻址（key=文本 MD5，相同文本 → 相同嵌入），跨用户命中无真实泄漏；
+        # 使用 OrderedDict 实现 LRU 上限，防内存无限增长（生产风险分析·风险1）
+        self._embedding_cache: "OrderedDict[str, Tuple[List[float], float]]" = OrderedDict()
+        self._embedding_cache_ttl = 300          # 5 分钟 TTL
+        self._embedding_cache_max_entries = 10000  # LRU 上限（约 10000×8KB ≈ 80MB 封顶）
+
         logger.info("VectorStoreService 初始化（延迟嵌入模式）")
     
     def _ensure_initialized(self):
@@ -313,12 +322,13 @@ class VectorStoreService:
         texts_to_embed: List[str] = []
         indices_to_fill: List[int] = []  # 需要回填的索引
         
-        # 检查缓存
+        # 检查缓存（命中时 move_to_end 维持 LRU 顺序）
         for i, text in enumerate(texts):
             cache_key = hashlib.md5(text.encode()).hexdigest()
             cached = self._embedding_cache.get(cache_key)
             if cached and (now - cached[1]) < self._embedding_cache_ttl:
                 results.append(cached[0])
+                self._embedding_cache.move_to_end(cache_key)
             else:
                 results.append([])  # 占位
                 texts_to_embed.append(text)
@@ -347,6 +357,10 @@ class VectorStoreService:
                 results[idx] = emb
                 cache_key = hashlib.md5(text.encode()).hexdigest()
                 self._embedding_cache[cache_key] = (emb, now)
+                self._embedding_cache.move_to_end(cache_key)
+            # LRU 淘汰：超出上限时弹出最久未使用的条目
+            while len(self._embedding_cache) > self._embedding_cache_max_entries:
+                self._embedding_cache.popitem(last=False)
             logger.debug(
                 f"Embedding 缓存命中 {len(texts) - len(texts_to_embed)}/{len(texts)}, "
                 f"共 {total_batches} 批"
