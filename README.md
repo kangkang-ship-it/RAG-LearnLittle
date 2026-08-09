@@ -208,12 +208,35 @@ npm run dev
 
 | 用户名 | 密码 | 说明 |
 | :--- | :--- | :--- |
-| `admin` | `admin1234` | 本地开发自动创建 |
+| `admin` | `admin1234` | 仅 `APP_ENV != production` 时自动创建（或显式 `ENABLE_TEST_USER=true`） |
 
 > 💡 首次运行提示：
 > - **重排序模型首次下载**：`BAAI/bge-reranker-v2-m3`（约 1GB）需从 HuggingFace 下载。首次部署请临时设置 `HF_HUB_OFFLINE=0`，下载完成后可恢复离线模式
 > - 切换 Embedding 提供商后需**删除并重建 ChromaDB 向量库**（`data/chroma/`）；切换模型提供商后需重启服务
-> - 生产环境务必修改 `JWT_SECRET` 并设置 `LOG_LEVEL=INFO`、`LOG_FORMAT=json`
+> - 生产环境：`APP_ENV=production`、`JWT_SECRET` 必须为强随机值（启动强校验，公开默认值会拒绝启动）、`LOG_LEVEL=INFO`、`LOG_FORMAT=json`、`CORS_ORIGINS` 配置前端域名白名单（使用 `*` 时自动关闭凭据跨域）
+
+---
+
+## 🐳 生产部署（Docker Compose）
+
+```bash
+cp .env.example .env          # 配置全部环境变量（JWT_SECRET 必填强随机值）
+docker compose up -d --build
+# 前端 http://localhost/（nginx 反代 /api，SSE 已禁用缓冲）
+# 健康检查: GET /health（存活） /ready（就绪，含 MySQL/Redis 连通探测） /metrics（Prometheus）
+```
+
+要点：
+
+- **数据库迁移**：启动时 `alembic upgrade head` 自动执行（空库建表 / 遗留库自动 stamp）。新增模型后生成迁移：
+  ```bash
+  .venv/Scripts/python.exe -m alembic revision --autogenerate -m "描述"
+  .venv/Scripts/python.exe -m alembic upgrade head
+  ```
+- **重排序模型**：容器内需可访问本地模型缓存（默认 `HF_HUB_OFFLINE=1`）。把本机 `~/.cache/huggingface` 拷到 `./huggingface_cache/`（或设置 `HF_CACHE_DIR`），或在构建时 `docker build --build-arg PRELOAD_MODELS=true .`
+- **端口**：`8000` 仅为本机调试暴露，外部流量统一走前端 nginx（80）
+- **单进程部署**：多 worker/多实例前需先完成 Redis 化限流、scheduler 去重与 ChromaDB 多进程写冲突改造（见已知限制）
+- **监控**：`/metrics` 暴露 Prometheus 指标（HTTP 计数/耗时）；`/ready` 就绪探针检查后台初始化 + MySQL/Redis 连通性
 
 ---
 
@@ -302,10 +325,22 @@ RAG_LearnLittleCode/          # 本地目录名可自由修改
 
 ## ✅ 测试与评测
 
-### 单元测试
+### 后端冒烟测试（CI 可跑，无外部依赖）
 
 ```bash
-pytest test_plan_execute.py -v   # Plan-and-Execute 流程测试
+pip install -r requirements-dev.txt   # 开发/测试依赖（生产依赖见 requirements.txt）
+python -m pytest tests/ -v            # SSRF 守卫 / JWT 强校验 / MCP 包装等纯逻辑测试
+```
+
+> 根目录旧调试脚本（`test_*.py` / `repro_tmp.py` 等）已移入 [scripts/manual/](scripts/manual/)，用途与处置建议见其 README；它们依赖真实 DB/LLM，不属于 CI 测试。
+
+### 前端测试与质量门禁（CI 同步执行）
+
+```bash
+cd front
+npm run lint      # eslint（typescript-eslint + react-hooks）
+npm test          # vitest（SSE 解析器 / client 401 刷新）
+npm run build     # tsc --noEmit + vite build（tsconfig 已开启 strict）
 ```
 
 ### AI 对话黄金评测
@@ -342,7 +377,7 @@ pytest test_plan_execute.py -v   # Plan-and-Execute 流程测试
 
 - 分支：`main` 为稳定基线，新功能在独立分支开发（如 `Agent`），验证通过后合入
 - 提交信息：中文一句话描述改动内容与动机，重要改动附编号（如 P2-3）
-- 提交前运行 `pytest test_plan_execute.py` 与前端 `npm run build` 确认无回归
+- 提交前运行 `python -m pytest tests/`、前端 `npm run lint && npm test && npm run build` 确认无回归（CI 会全量执行）
 
 ### 配置调参
 

@@ -15,6 +15,7 @@ venv/
 data/
 logs/
 media/
+huggingface_cache/
 backend_err.log
 backend_out.log
 backend_stderr.log
