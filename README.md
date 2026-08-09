@@ -43,8 +43,8 @@
 <div align="center">
 <table>
   <tr>
-    <td width="50%" align="center"><b>🗨️ AI 对话</b><br/><img src="docs/DMT.png" alt="AI 对话" width="100%"/></td>
-    <td width="50%" align="center"><b>🧠 深度思考 / 多模态</b><br/><img src="docs/SDSK.png" alt="深度思考 / 多模态" width="100%"/></td>
+    <td width="50%" align="center"><b>🗨️ AI 对话</b><br/><img src="docs/SDSK.png" alt="AI 对话" width="100%"/></td>
+    <td width="50%" align="center"><b>🧠 深度思考 / 多模态</b><br/><img src="docs/DMT.png" alt="深度思考 / 多模态" width="100%"/></td>
   </tr>
   <tr>
     <td width="50%" align="center"><b>📓 笔记管理</b><br/><img src="docs/NoteImage.png" alt="笔记管理" width="100%"/></td>
@@ -66,7 +66,7 @@
 | 🛠️ **Agent 工具层** | 9 组 **15 个内置工具** + **MCP 动态工具**（数量随配置变化，当前 Tavily 白名单 2 个 + Fetch 全量）：关键词路由按需加载 + 全量兜底；工具调用审计落库、邮件安全校验与限流 |
 | 🌐 **MCP 联网能力** | Tavily 联网搜索 / URL 内容提取 + Fetch 通用网页抓取（转 Markdown），白名单注册进 "mcp" 组，Server 故障自动降级跳过 |
 | 🗣️ **语音合成** | Edge TTS 朗读（MP3，按用户目录隔离），对话中直接"朗读 / 读给我听"触发 |
-| 📊 **PPT 生成** | 关键词触发的讲解 PPT 生成（python-pptx 本地渲染，无额外额度）+ PPT 模板管理 |
+| 📊 **PPT 生成** | 关键词触发的讲解 PPT 生成（python-pptx 本地渲染，无额外额度）+ PPT 模板管理 +可切换Aspose.Slides Cloud API|
 | 🌍 **外部 API 工具** | DeepL 高质量翻译 · Wolfram Alpha 精确计算 / 解方程 / 单位换算 |
 | 📓 **笔记系统** | 富文本编辑（TipTap）、模板、AI 自动补全 / 打标签 |
 | 🗑️ **回收站** | 笔记删除进入回收站，14 天自动彻底清除（定时任务） |
