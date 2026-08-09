@@ -10,9 +10,10 @@ MySQL 数据库配置模块
 
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncGenerator
 
-from sqlalchemy import text, inspect, event
+from sqlalchemy import inspect, event
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -114,75 +115,40 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 async def init_db() -> None:
     """
-    初始化数据库表结构
-    
-    执行流程：
-    1. create_all: 创建所有不存在的表
-    2. _migrate_columns: 自动补列迁移（检测模型中新增的列并 ALTER TABLE ADD COLUMN）
-    
-    注意：这是轻量级迁移方案，不支持删列、改类型等复杂操作。
-    复杂迁移建议使用 Alembic。
-    """
-    async with engine.begin() as conn:
-        # 创建所有表
-        await conn.run_sync(Base.metadata.create_all)
-        logger.info("数据库表结构初始化完成")
-    
-    # 执行自动补列迁移
-    await _migrate_columns()
+    初始化数据库表结构（Alembic 迁移驱动，审查 P1-2 替代手写 create_all + 补列）
 
+    流程：
+    1. 遗留库检测：有业务表但无 alembic_version 表（create_all/_migrate_columns 时代
+       创建的库，schema 与当前模型一致），先 stamp 到 head，标记为已迁移
+    2. 执行 `alembic upgrade head`：空库自动全量建表，有版本则增量迁移
 
-async def _migrate_columns() -> None:
+    Alembic 运行在线程中（asyncio.to_thread），内部自建独立引擎，
+    避免跨 event loop 复用连接（见 alembic/env.py 说明）。
     """
-    自动补列迁移
-    
-    对比 SQLAlchemy 模型定义的列与数据库实际表的列，
-    自动执行 ALTER TABLE ADD COLUMN 添加缺失的列。
-    
-    限制：
-    - 只能添加新列，不能修改或删除已有列
-    - 新增的非空列必须有默认值，否则可能导致现有查询异常
-    """
-    async with engine.begin() as conn:
-        # 获取数据库检查器
-        def get_table_columns(sync_conn):
+    import asyncio
+
+    from alembic import command
+    from alembic.config import Config
+
+    # alembic.ini 固定在项目根目录（支持任意 CWD 启动）
+    alembic_ini = Path(__file__).resolve().parents[2] / "alembic.ini"
+    cfg = Config(str(alembic_ini))
+
+    # 遗留库检测：存在业务表且无 alembic_version → stamp 到 head
+    async with engine.connect() as conn:
+        def _check_legacy(sync_conn):
             inspector = inspect(sync_conn)
-            return {
-                table_name: {col["name"] for col in inspector.get_columns(table_name)}
-                for table_name in inspector.get_table_names()
-            }
-        
-        existing_columns = await conn.run_sync(get_table_columns)
-        
-        # 遍历所有模型，检查是否有缺失的列
-        for table in Base.metadata.tables.values():
-            table_name = table.name
-            
-            if table_name not in existing_columns:
-                # 表不存在（应该已被 create_all 创建）
-                continue
-            
-            existing_cols = existing_columns[table_name]
-            
-            for column in table.columns:
-                if column.name not in existing_cols:
-                    # 构建 ADD COLUMN 语句
-                    col_type = column.type.compile(engine.dialect)
-                    nullable = "NULL" if column.nullable else "NOT NULL"
-                    default = ""
-                    if column.default is not None:
-                        if hasattr(column.default, 'arg'):
-                            default = f" DEFAULT '{column.default.arg}'"
-                    elif column.server_default is not None:
-                        default = f" DEFAULT {column.server_default.arg}"
-                    
-                    sql = f"ALTER TABLE `{table_name}` ADD COLUMN `{column.name}` {col_type} {nullable}{default}"
-                    
-                    try:
-                        await conn.execute(text(sql))
-                        logger.info(f"自动补列: {table_name}.{column.name}")
-                    except Exception as e:
-                        logger.error(f"补列失败: {table_name}.{column.name} - {e}")
+            tables = set(inspector.get_table_names())
+            return bool(tables) and "alembic_version" not in tables
+
+        is_legacy = await conn.run_sync(_check_legacy)
+
+    if is_legacy:
+        logger.info("检测到遗留数据库（无 alembic_version），stamp 到当前迁移版本")
+        await asyncio.to_thread(command.stamp, cfg, "head")
+
+    await asyncio.to_thread(command.upgrade, cfg, "head")
+    logger.info("数据库迁移完成 (alembic upgrade head)")
 
 
 async def close_db() -> None:
