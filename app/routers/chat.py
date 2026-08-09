@@ -239,14 +239,10 @@ async def chat_query(
             yield f"data: {json.dumps({'type': 'error', 'content': '并发连接数已达上限（最多 %d 个），请关闭多余标签页后重试' % SSE_MAX_CONNECTIONS_PER_USER})}\n\n"
         return StreamingResponse(limit_stream(), media_type="text/event-stream")
     
-    # 后台触发自动更新会话标题（非阻塞，chat_model 已就绪；仅发附件时用附件名兜底）
-    spawn_background_task(
-        chat_service.generate_and_update_title(
-            session_id, data.message, chat_model,
-            attachment_names=attachment_names or None,
-        ),
-        name="chat_title_generate",
-    )
+    # 标题生成模型（D 项：用轻量模型 flash，避免与主 Agent 抢 qwen3.7-max 并发导致
+    # DashScope 连接不稳定；flash 不可用时降级主模型）。
+    # 标题生成本身推迟到主 Agent 完成后执行（见 generate_stream 的 done 事件之后）
+    title_model = getattr(init_manager, "classifier_model", None) or chat_model
     
     # ===== 并行执行 RAG 检索 + 记忆压缩（两者无数据依赖）=====
     from datetime import datetime
@@ -664,7 +660,18 @@ async def chat_query(
                     for s in rag_sources[:3]
                 ]
             yield f"data: {json.dumps(done_data)}\n\n"
-            
+
+            # 主 Agent 完成后再生成标题（D 项：与主流程错峰执行，消除并发挤
+            # DashScope 连接导致的 Connection error；轻量模型调用快，
+            # 标题更新延迟几秒对用户无感。error 路径不触发——失败时标题无意义）
+            spawn_background_task(
+                chat_service.generate_and_update_title(
+                    session_id, data.message, title_model,
+                    attachment_names=attachment_names or None,
+                ),
+                name="chat_title_generate",
+            )
+
         except Exception as e:
             logger.error(f"AI 对话流生成失败: {type(e).__name__}: {e}", exc_info=True)
             # 对外统一文案（审查 M15：内部异常细节仅入日志，不直出客户端）
