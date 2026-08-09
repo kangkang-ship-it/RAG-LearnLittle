@@ -23,6 +23,7 @@ from langgraph.graph import END, START, StateGraph
 from app.ai_service.chat_route import ChatRouteContext, decide_route, plan_events, react_events
 from app.core.logger_handler import logger
 from app.core.model_trace import set_trace_stage
+from app.core.task_runner import spawn_background_task
 
 
 class ChatState(TypedDict):
@@ -151,7 +152,8 @@ async def stream_chat_graph(ctx: ChatRouteContext) -> AsyncGenerator[dict, None]
         except Exception as e:
             logger.error(f"对话图执行失败: {type(e).__name__}: {e}", exc_info=True)
             try:
-                await queue.put({"type": "error", "content": f"生成失败: {str(e)}"})
+                # 对外统一文案（审查 M15：内部异常细节仅入日志，不直出客户端）
+                await queue.put({"type": "error", "content": "生成失败，请稍后重试"})
             except Exception:
                 pass
         finally:
@@ -161,7 +163,7 @@ async def stream_chat_graph(ctx: ChatRouteContext) -> AsyncGenerator[dict, None]
             except Exception:
                 pass
 
-    task = asyncio.create_task(_run())
+    task = spawn_background_task(_run(), name="chat_graph_run")
     try:
         while True:
             event = await queue.get()

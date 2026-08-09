@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, Optional
 
 from app.core.logger_handler import logger
 from app.core.model_trace import get_trace_context
+from app.core.task_runner import spawn_background_task
 
 
 class AgentMiddleware:
@@ -136,7 +137,7 @@ async def _audit_after_tool(context: dict) -> None:
         "success": context.get("success", True),
     }
     try:
-        asyncio.create_task(_write_audit(row))
+        spawn_background_task(_write_audit(row), name="tool_audit_write")
     except Exception as e:
         logger.warning(f"工具审计任务创建失败: {e}")
 

@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logger_handler import logger
 from app.core.failed_response import BusinessError, ErrorCode
+from app.core.task_runner import spawn_background_task
 from app.models.note import Note
 from app.models.review import ReviewRecord
 from app.schemas.note import NoteCreate, NoteUpdate
@@ -89,12 +90,14 @@ class NoteService:
         await db.refresh(note)
         
         # 异步写入 ChromaDB（失败不影响主流程）
+        # 注意（审查 M9 遗留）：任务内传递已提交的 ORM 对象，依赖 expire_on_commit=False；
+        # 后续改造为传 note_id 重新查询
         if self.vector_store:
-            asyncio.create_task(self._sync_to_vector(note))
+            spawn_background_task(self._sync_to_vector(note), name="note_sync_vector")
             logger.info(f"ChromaDB 异步写入任务已创建: note_id={note.id}")
-        
+
         # 后台异步生成标签和创建回顾记录（不传入 db，因为请求 session 会在响应返回后关闭）
-        asyncio.create_task(self._auto_tag_and_review(note))
+        spawn_background_task(self._auto_tag_and_review(note), name="note_auto_tag")
         
         logger.info(f"笔记创建成功: note_id={note.id}, user_id={user_id}")
         return note
@@ -248,7 +251,7 @@ class NoteService:
         # 同步更新 ChromaDB 向量
         if self.vector_store:
             logger.info(f"创建异步写入任务: note_id={note.id}")
-            asyncio.create_task(self._sync_to_vector(note))
+            spawn_background_task(self._sync_to_vector(note), name="note_update_sync_vector")
         
         logger.info(f"笔记更新: note_id={note_id}")
         return note

@@ -61,7 +61,7 @@ def _get_email_service():
     return EmailService()
 
 
-@router.post("/auth/register", summary="用户注册")
+@router.post("/auth/register", summary="用户注册", dependencies=[Depends(rate_limit(endpoint_limit=5))])
 async def register(data: UserRegister, db: AsyncSession = Depends(get_db)):
     """
     注册新用户

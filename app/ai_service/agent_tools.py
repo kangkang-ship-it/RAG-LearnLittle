@@ -250,7 +250,9 @@ def create_agent_tools(
             try:
                 note = await note_service.get_note(db, note_id, user_id)
             except Exception as e:
-                return f"未找到笔记: {str(e)}"
+                # 审查 M15：内部异常细节仅入日志，工具返回类别级提示
+                logger.warning(f"读取笔记失败: note_id={note_id}, error={e}")
+                return "未找到笔记或无权访问"
 
         content = note.content or ""
         truncated = len(content) > MAX_CONTENT_CHARS
@@ -392,7 +394,9 @@ def create_agent_tools(
                 await db.commit()
                 return f"笔记更新成功！ID: {note.id}, 标题: {note.title}"
             except Exception as e:
-                return f"笔记更新失败: {str(e)}"
+                # 审查 M15：内部异常细节仅入日志，工具返回类别级提示
+                logger.warning(f"笔记更新失败: note_id={note_id}, error={e}")
+                return "笔记更新失败，请稍后重试"
 
     @tool
     async def get_related_notes_tool(note_title: str, top_k: int = 3) -> str:
@@ -529,7 +533,11 @@ def create_agent_tools(
         except Exception as e:
             # 捕获所有异常返回友好提示，防止异常冒泡导致 Agent 循环中断
             logger.error(f"PPT 生成失败: user={user_id[:8]}, error={e}", exc_info=True)
-            return f"PPT 生成失败：{e}"
+            # 审查 M15：PptError 的 message 面向用户可透传，内部异常只给类别级提示
+            from app.services.ppt_service import PptError
+            if isinstance(e, PptError):
+                return f"PPT 生成失败：{e}"
+            return "PPT 生成失败，请稍后重试或检查笔记内容"
 
     @tool
     async def text_to_speech(text: str, voice: str = "zh-CN-XiaoxiaoNeural") -> str:

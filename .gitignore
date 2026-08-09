@@ -16,6 +16,9 @@ data/
 logs/
 media/
 huggingface_cache/
+
+# TLS 证书（生产密钥，不入库）
+certs/
 backend_err.log
 backend_out.log
 backend_stderr.log
@@ -35,3 +38,4 @@ Thumbs.db
 .coverage
 htmlcov/
 .pytest_cache/
+backups/

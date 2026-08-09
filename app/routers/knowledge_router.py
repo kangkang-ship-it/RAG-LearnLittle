@@ -355,10 +355,11 @@ async def upload_document(
             yield _make_sse_event({"event_type": "finish"})
 
         except Exception as e:
-            logger.error(f"文档处理失败: {e}")
+            logger.error(f"文档处理失败: {type(e).__name__}: {e}", exc_info=True)
+            # 对外统一文案（审查 M15：内部异常细节仅入日志，不直出客户端）
             yield _make_sse_event({
                 "event_type": "error",
-                "message": f"文档处理失败: {str(e)}",
+                "message": "文档处理失败，请稍后重试",
             })
 
     return StreamingResponse(

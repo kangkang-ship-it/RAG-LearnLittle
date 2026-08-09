@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logger_handler import logger
 from app.core.success_response import success_response
 from app.core.rate_limit import rate_limit
+from app.core.task_runner import spawn_background_task
 from app.core.failed_response import BusinessError, ErrorCode
 from app.core.model_trace import set_trace_context, clear_trace_context, new_request_id
 from app.db.database import get_db, async_session_factory
@@ -51,7 +52,51 @@ LLM_STREAM_TIMEOUT = int(os.getenv("LLM_STREAM_TIMEOUT", "60"))
 # SSE 单用户最大并发连接数
 # 防止恶意用户通过大量 SSE 连接耗尽服务器资源
 SSE_MAX_CONNECTIONS_PER_USER = 3
+# 进程内兜底计数（Redis 不可用时降级；多进程部署以 Redis 计数为准，审查 M11）
 _sse_active_counts: dict[str, int] = {}
+
+
+async def _acquire_sse_slot(user_id: str) -> bool:
+    """
+    获取 SSE 连接槽位（Redis 计数优先，多进程部署天然生效）
+
+    返回 True=获得槽位。Redis 不可用时降级进程内计数（保证聊天可用）。
+    """
+    from app.db.redis_client import get_redis
+
+    try:
+        redis = get_redis()
+        key = f"sse_conn:{user_id}"
+        count = await redis.incr(key)
+        if count == 1:
+            # TTL 兜底：连接异常释放时自动清理（120s > SSE 正常生命周期）
+            await redis.expire(key, 120)
+        if count > SSE_MAX_CONNECTIONS_PER_USER:
+            await redis.decr(key)  # 回退计数
+            logger.warning(f"SSE 连接数超限（Redis）: user={user_id[:8]}, count={count}")
+            return False
+        return True
+    except Exception as e:
+        # Redis 故障降级：进程内计数
+        logger.warning(f"SSE Redis 计数不可用，降级进程内: {e}")
+
+    if _sse_active_counts.get(user_id, 0) >= SSE_MAX_CONNECTIONS_PER_USER:
+        logger.warning(f"SSE 连接数超限（进程内）: user={user_id[:8]}")
+        return False
+    _sse_active_counts[user_id] = _sse_active_counts.get(user_id, 0) + 1
+    return True
+
+
+async def _release_sse_slot(user_id: str) -> None:
+    """释放 SSE 连接槽位（与 _acquire_sse_slot 对称；Redis 计数由 TTL 兜底清理）"""
+    from app.db.redis_client import get_redis
+
+    try:
+        await get_redis().decr(f"sse_conn:{user_id}")
+        return
+    except Exception as e:
+        logger.debug(f"SSE Redis 计数释放失败（TTL 自动清理兜底）: {e}")
+    _sse_active_counts[user_id] = max(0, _sse_active_counts.get(user_id, 1) - 1)
 
 
 def _estimate_attachment_tokens(attachments) -> int:
@@ -144,8 +189,9 @@ async def chat_query(
         )
     except Exception as e:
         logger.error(f"会话/消息初始化失败: {type(e).__name__}: {e}", exc_info=True)
+        # 对外统一文案（审查 M15：内部异常细节仅入日志，不直出客户端）
         async def err_stream():
-            yield f"data: {json.dumps({'type': 'error', 'content': f'会话创建失败: {str(e)}'})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'content': '会话创建失败，请稍后重试'})}\n\n"
         return StreamingResponse(err_stream(), media_type="text/event-stream")
     
     # 获取 AI 模型（等待后台初始化完成）
@@ -187,19 +233,19 @@ async def chat_query(
             yield f"data: {json.dumps({'type': 'error', 'content': 'AI 模型未初始化'})}\n\n"
         return StreamingResponse(error_stream(), media_type="text/event-stream")
     
-    # SSE 并发连接数检查（在昂贵操作之前拦截）
-    if _sse_active_counts.get(user_id, 0) >= SSE_MAX_CONNECTIONS_PER_USER:
-        logger.warning(f"SSE 连接数超限: user_id={user_id}, count={_sse_active_counts[user_id]}")
+    # SSE 并发连接数检查（在昂贵操作之前拦截；Redis 计数，多进程部署天然生效）
+    if not await _acquire_sse_slot(user_id):
         async def limit_stream():
             yield f"data: {json.dumps({'type': 'error', 'content': '并发连接数已达上限（最多 %d 个），请关闭多余标签页后重试' % SSE_MAX_CONNECTIONS_PER_USER})}\n\n"
         return StreamingResponse(limit_stream(), media_type="text/event-stream")
     
     # 后台触发自动更新会话标题（非阻塞，chat_model 已就绪；仅发附件时用附件名兜底）
-    asyncio.create_task(
+    spawn_background_task(
         chat_service.generate_and_update_title(
             session_id, data.message, chat_model,
             attachment_names=attachment_names or None,
-        )
+        ),
+        name="chat_title_generate",
     )
     
     # ===== 并行执行 RAG 检索 + 记忆压缩（两者无数据依赖）=====
@@ -336,13 +382,14 @@ async def chat_query(
             # 异步触发里程碑摘要检查（非阻塞）
             threshold = mc_config.get("summarize_threshold", 40)
             min_interval = mc_config.get("min_summary_interval", 20)
-            asyncio.create_task(
+            spawn_background_task(
                 check_and_summarize(
                     chat_model=chat_model,
                     session_id=session_id,
                     threshold=threshold,
                     min_interval=min_interval,
-                )
+                ),
+                name="chat_summary_check",
             )
         except Exception as e:
             logger.warning(f"记忆压缩管线失败，回退到简单截断: {e}")
@@ -481,9 +528,7 @@ async def chat_query(
     # ===== SSE 流式响应生成器 =====
     async def generate_stream():
         """生成 SSE 流式响应（RAG + 记忆压缩已并行完成，直接生成）"""
-        # SSE 连接计数 +1（在生成器内部，确保只有实际流式传输时才占用连接槽）
-        _sse_active_counts[user_id] = _sse_active_counts.get(user_id, 0) + 1
-        logger.debug(f"SSE 连接 +1: user={user_id[:8]}, active={_sse_active_counts[user_id]}")
+        # SSE 连接计数由 _acquire_sse_slot 在请求进入时完成（Redis 优先）
         try:
             # 发送思考事件
             if rag_context:
@@ -606,7 +651,7 @@ async def chat_query(
                         except Exception as e:
                             logger.warning(f"附件绑定消息失败: {e}")
 
-                asyncio.create_task(_save_reply_and_bind())
+                spawn_background_task(_save_reply_and_bind(), name="chat_save_reply")
             
             # 发送完成事件（包含 RAG 来源信息）
             done_data = {'type': 'done', 'session_id': session_id}
@@ -619,11 +664,12 @@ async def chat_query(
             
         except Exception as e:
             logger.error(f"AI 对话流生成失败: {type(e).__name__}: {e}", exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'content': f'生成失败: {str(e)}'})}\n\n"
+            # 对外统一文案（审查 M15：内部异常细节仅入日志，不直出客户端）
+            yield f"data: {json.dumps({'type': 'error', 'content': '生成失败，请稍后重试'})}\n\n"
         finally:
-            # SSE 连接计数 -1（生成器结束时释放，无论正常完成还是异常）
-            _sse_active_counts[user_id] = max(0, _sse_active_counts.get(user_id, 1) - 1)
-            logger.debug(f"SSE 连接 -1: user={user_id[:8]}, active={_sse_active_counts.get(user_id, 0)}")
+            # SSE 连接计数释放（生成器结束时释放，无论正常完成还是异常）
+            await _release_sse_slot(user_id)
+            logger.debug(f"SSE 连接 -1: user={user_id[:8]}")
     
     return StreamingResponse(
         generate_stream(),
@@ -687,11 +733,12 @@ async def rag_query(
             "sources": result.get("sources", []),
         })
     except Exception as e:
-        logger.error(f"RAG 查询失败: {e}", exc_info=True)
-        return success_response(data={
-            "answer": f"RAG 查询失败: {str(e)}",
-            "sources": [],
-        })
+        logger.error(f"RAG 查询失败: {type(e).__name__}: {e}", exc_info=True)
+        # 审查 M3/M15：不再把错误吞进 200 成功响应；对外统一文案走全局异常处理器
+        raise BusinessError(
+            code=ErrorCode.LLM_CALL_FAILED,
+            message="RAG 查询失败，请稍后重试",
+        )
 
 
 # ============================================================

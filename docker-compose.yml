@@ -73,6 +73,12 @@ services:
     container_name: raglearn-front
     ports:
       - "80:80"
+      - "443:443"
+    volumes:
+      # HTTPS 证书（审查高优先级 3）：把 fullchain.pem / privkey.pem 放入 ./certs/
+      # 生成自签名示例: openssl req -x509 -newkey rsa:2048 -nodes -keyout certs/privkey.pem -out certs/fullchain.pem -days 365 -subj "/CN=localhost"
+      # 生产请使用 Let's Encrypt 等正规证书
+      - ./certs:/etc/nginx/certs:ro
     depends_on:
       - backend
     restart: unless-stopped
