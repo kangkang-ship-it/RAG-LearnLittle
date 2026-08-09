@@ -32,7 +32,10 @@ config = context.config
 config.set_main_option("sqlalchemy.url", DATABASE_URL)
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # 关键：disable_existing_loggers=False —— fileConfig 默认会禁用所有未在
+    # alembic.ini 中声明的 logger（含应用的 raglearn logger），
+    # 导致 init_db 跑完迁移后应用日志全部静默（实测 2026-08-09）
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
