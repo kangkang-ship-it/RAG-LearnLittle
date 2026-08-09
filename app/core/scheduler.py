@@ -51,6 +51,23 @@ async def cleanup_expired_notes() -> int:
             raise
 
 
+async def cleanup_orphan_tts_files() -> int:
+    """
+    清理过期 TTS 音频文件（TTL 默认 24h，TTS_FILE_TTL_HOURS 控制）
+
+    覆盖生成中断/未写入消息等无引用场景（生成时清理只能覆盖正常路径）。
+    """
+    from app.routers.tts_router import cleanup_expired_tts_files
+
+    try:
+        count = await cleanup_expired_tts_files()
+        logger.info(f"定时清理过期 TTS 文件完成: 删除 {count} 个")
+        return count
+    except Exception as e:
+        logger.error(f"定时清理过期 TTS 文件失败: {e}")
+        raise
+
+
 async def cleanup_orphan_chat_attachments() -> int:
     """
     清理孤儿聊天附件（未绑定会话 + 超过 TTL，默认 24h）
@@ -92,8 +109,19 @@ def init_scheduler() -> None:
         replace_existing=True,
         misfire_grace_time=3600,
     )
+    scheduler.add_job(
+        cleanup_orphan_tts_files,
+        trigger=CronTrigger(hour=3, minute=40),
+        id="cleanup_orphan_tts_files",
+        name="清理过期 TTS 文件",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
     scheduler.start()
-    logger.info("定时任务调度器已启动（03:00 清理回收站过期笔记，03:20 清理孤儿聊天附件）")
+    logger.info(
+        "定时任务调度器已启动（03:00 清理回收站过期笔记，"
+        "03:20 清理孤儿聊天附件，03:40 清理过期 TTS 文件）"
+    )
 
 
 def shutdown_scheduler() -> None:

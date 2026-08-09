@@ -571,6 +571,16 @@ def create_agent_tools(
         duration = f"~{max(len(text) // 10, 1)}s"
         if truncated:
             duration += "（内容超长已截断）"
+
+        # 生成后按用户目录 TTL/配额清理（与 PPT._cleanup 对称，防磁盘膨胀；
+        # 定时任务兜底覆盖生成中断场景，见 scheduler.cleanup_orphan_tts_files）
+        try:
+            import asyncio
+            from app.routers.tts_router import cleanup_user_tts_files
+            await asyncio.to_thread(cleanup_user_tts_files, user_id)
+        except Exception as e:
+            logger.warning(f"TTS 用户目录清理失败: {e}")
+
         return json.dumps({
             "file_id": file_id,
             "audio_url": f"/api/v1/tts/{file_id}",
