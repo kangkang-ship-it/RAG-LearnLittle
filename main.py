@@ -514,23 +514,54 @@ if __name__ == "__main__":
         def __init__(self):
             super().__init__(fmt="%(asctime)s %(levelname)s:  %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 
-    _uvicorn_formatter = _SimpleFormatter()
-
-    # uvicorn.error → logs/uvicorn.log（启动、关闭、错误信息）
-    _uvicorn_error_fh = TimedRotatingFileHandler(
-        filename=_log_dir / "uvicorn.log",
-        when="midnight", interval=1, backupCount=30, encoding="utf-8",
-    )
-    _uvicorn_error_fh.setFormatter(_uvicorn_formatter)
-    logging.getLogger("uvicorn").addHandler(_uvicorn_error_fh)
-
-    # uvicorn.access → logs/access.log（HTTP 访问日志）
-    _uvicorn_access_fh = TimedRotatingFileHandler(
-        filename=_log_dir / "access.log",
-        when="midnight", interval=1, backupCount=30, encoding="utf-8",
-    )
-    _uvicorn_access_fh.setFormatter(_uvicorn_formatter)
-    logging.getLogger("uvicorn.access").addHandler(_uvicorn_access_fh)
+    # uvicorn 日志配置：控制台 + 文件双输出（文件按日轮转，保留 30 天）
+    # 注意：不能先 logging.getLogger("uvicorn").addHandler(...) 再 uvicorn.run() ——
+    # uvicorn.run 内部的 dictConfig 会重建 uvicorn/uvicorn.error/uvicorn.access
+    # 三个 logger 并清掉手动添加的 handler（实测 logs/uvicorn.log、access.log 一直为空）。
+    # 正确做法：把文件 handler 写进 log_config 字典传给 uvicorn.run。
+    _uvicorn_log_config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "default": {"()": _SimpleFormatter},
+            "access": {"()": _SimpleFormatter},
+        },
+        "handlers": {
+            "console": {
+                "class": "logging.StreamHandler",
+                "formatter": "default",
+                "stream": "ext://sys.stderr",
+            },
+            "console_access": {
+                "class": "logging.StreamHandler",
+                "formatter": "access",
+                "stream": "ext://sys.stderr",
+            },
+            "file_uvicorn": {
+                "class": "logging.handlers.TimedRotatingFileHandler",
+                "formatter": "default",
+                "filename": str(_log_dir / "uvicorn.log"),
+                "when": "midnight",
+                "interval": 1,
+                "backupCount": 30,
+                "encoding": "utf-8",
+            },
+            "file_access": {
+                "class": "logging.handlers.TimedRotatingFileHandler",
+                "formatter": "access",
+                "filename": str(_log_dir / "access.log"),
+                "when": "midnight",
+                "interval": 1,
+                "backupCount": 30,
+                "encoding": "utf-8",
+            },
+        },
+        "loggers": {
+            "uvicorn": {"handlers": ["console", "file_uvicorn"], "level": "INFO", "propagate": False},
+            "uvicorn.error": {"level": "INFO"},
+            "uvicorn.access": {"handlers": ["console_access", "file_access"], "level": "INFO", "propagate": False},
+        },
+    }
 
     uvicorn.run(
         "main:app",
@@ -538,4 +569,5 @@ if __name__ == "__main__":
         port=int(_clean_env("PORT", "8000")),
         reload=reload,
         log_level=log_level,
+        log_config=_uvicorn_log_config,
     )
