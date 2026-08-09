@@ -475,7 +475,7 @@ export default function AIChat() {
     }
   };
 
-  const quickQuestions = ['帮我解释量子计算', '写一首春天的诗', '推荐几本好书'];
+  const quickQuestions = ['Deepseek大模型最新进展', 'AI Agent领域最新进展', '帮我搜索ChatGPT的最新论文并整理成笔记'];
 
   // 传给 MessageBubble 的 Plan 展示状态
   const planState: PlanDisplayState = {
