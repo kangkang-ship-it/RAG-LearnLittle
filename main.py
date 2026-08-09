@@ -399,6 +399,7 @@ from app.routers import (
     usage,
     ppt_router,
     ppt_template_router,
+    tts_router,
 )
 
 # 健康检查（不需要认证）
@@ -416,6 +417,7 @@ app.include_router(note_template_router.router, prefix=API_PREFIX, tags=["Note T
 app.include_router(usage.router, prefix=API_PREFIX, tags=["Usage"])
 app.include_router(ppt_router.router, prefix=API_PREFIX, tags=["PPT"])
 app.include_router(ppt_template_router.router, prefix=API_PREFIX, tags=["PPT"])
+app.include_router(tts_router.router, prefix=API_PREFIX, tags=["TTS"])
 
 # 静态文件服务（头像访问）
 # 确保头像存储目录存在

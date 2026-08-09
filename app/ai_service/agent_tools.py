@@ -16,10 +16,16 @@ Agent 工具集
 12. generate_ppt_tool - 根据选中的笔记生成讲解 PPT（.pptx，设计方案 §4.1）
 """
 
+import json
+import os
 import re
 import time
+import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Optional, List
+
+import httpx
 
 from langchain_core.tools import tool
 
@@ -54,6 +60,85 @@ def _email_rate_allowed(user_id: str, limit: int, window_sec: int = 3600) -> boo
 def _email_send_record(user_id: str) -> None:
     """记录一次成功发送（供限流窗口使用）"""
     _email_send_history.setdefault(user_id, []).append(time.time())
+
+
+# ============================================================
+# 外部 API 工具（直接集成，外部 API 工具接入文档 §4.1/§4.2）
+# 模块级 @tool：无用户上下文依赖，翻译/计算结果直接返回
+# ============================================================
+
+_DEEPL_MAX_CHARS = 5000
+
+
+@tool
+async def translate_text(text: str, target_lang: str, source_lang: str = "") -> str:
+    """使用 DeepL 将文本翻译为目标语言（质量优于 LLM 原生翻译，术语一致）。
+    适用场景：用户要求「翻译 / 翻译成 XX 语言」，尤其是长文、论文摘要、术语密集文本。
+
+    Args:
+        text: 要翻译的文本（最多 5000 字符/次，超出自动截断并提示）
+        target_lang: 目标语言代码（如 ZH, EN, JA, KO, DE, FR）
+        source_lang: 源语言代码（可选，留空自动检测）
+    """
+    api_key = os.getenv("DEEPL_API_KEY")
+    if not api_key:
+        return "翻译服务未配置（缺少 DEEPL_API_KEY）"
+    # Free 与 Pro 端点不同，通过环境变量区分（默认 Free）
+    base_url = os.getenv("DEEPL_API_URL", "https://api-free.deepl.com/v2/translate")
+    truncated = len(text) > _DEEPL_MAX_CHARS
+    if truncated:
+        text = text[:_DEEPL_MAX_CHARS]
+    params = {
+        "text": text,
+        "target_lang": target_lang.upper(),
+    }
+    if source_lang:
+        params["source_lang"] = source_lang.upper()
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                base_url, data=params,
+                headers={"Authorization": f"DeepL-Auth-Key {api_key}"},
+            )
+            resp.raise_for_status()
+            result = resp.json()
+    except Exception as e:
+        logger.error(f"DeepL 翻译失败: {e}")
+        return f"翻译失败：{e}。请稍后重试。"
+    translations = result.get("translations", [])
+    if not translations:
+        return "翻译结果为空"
+    output = translations[0]["text"]
+    if truncated:
+        output += f"\n\n[提示：原文超过 {_DEEPL_MAX_CHARS} 字符，已截断]"
+    return output
+
+
+@tool
+async def wolfram_calculate(query: str) -> str:
+    """使用 Wolfram Alpha 进行精确的数学计算、单位换算和科学查询。
+    适用于：解方程、求导、积分、单位换算、科学数据查询等。
+    当 LLM 自身计算不确定时，优先调用本工具获取可靠结果。
+
+    Args:
+        query: 计算查询（英文效果最佳，如 "solve x^2+5x+6=0"、"100 km/h in m/s"）
+    """
+    app_id = os.getenv("WOLFRAM_APP_ID")
+    if not app_id:
+        return "计算服务未配置（缺少 WOLFRAM_APP_ID）"
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                "https://api.wolframalpha.com/v1/result",
+                params={"appid": app_id, "i": query},
+            )
+            if resp.status_code == 400:
+                return f"Wolfram Alpha 无法理解查询: {query}"
+            resp.raise_for_status()
+            return resp.text
+    except Exception as e:
+        logger.error(f"Wolfram Alpha 计算失败: {e}")
+        return f"计算失败：{e}。请稍后重试。"
 
 
 def create_agent_tools(
@@ -446,6 +531,52 @@ def create_agent_tools(
             logger.error(f"PPT 生成失败: user={user_id[:8]}, error={e}", exc_info=True)
             return f"PPT 生成失败：{e}"
 
+    @tool
+    async def text_to_speech(text: str, voice: str = "zh-CN-XiaoxiaoNeural") -> str:
+        """将文本转换为语音 MP3 文件（生成后可通过下载链接获取，用于笔记朗读、语言学习）。
+        适用场景：用户说「朗读 / 读给我听 / 转成语音 / 转成音频」，尤其结合笔记朗读。
+        **重要**：text 必须是【要朗读的完整内容】（如笔记全文或完整段落），不要只传标题、
+        篇目名或几个词——否则生成的语音只有一两秒，用户无法收听。
+        如果用户未提供具体内容且未引用任何笔记（如仅说"朗读一下"），【不要调用本工具】，
+        应回复用户请其指定要朗读的笔记或内容。
+        返回 JSON 字符串，包含 file_id、audio_url、duration_estimate。
+        注意：生成成功后只需简短告知用户「语音已生成，点击下载卡片即可收听」。
+
+        Args:
+            text: 要转换的完整文本（最多 2000 字符/次，超出自动截断并提示）
+            voice: 语音名称（默认 zh-CN-XiaoxiaoNeural；英文可选 en-US-JennyNeural）
+        """
+        try:
+            import edge_tts
+        except ImportError:
+            return "语音服务不可用（未安装 edge-tts），请改用文字阅读"
+        truncated = len(text) > 2000  # 保护上下文窗口（截断前记录原始长度）
+        text = text[:2000]
+        if not text.strip():
+            return "文本内容为空，无法生成语音"
+
+        # 按用户目录隔离存储（与 ppt_router 安全模型一致：音频含笔记内容，不走公开目录）
+        from app.routers.tts_router import TTS_FILE_ROOT
+        file_id = uuid.uuid4().hex
+        user_tts_dir = Path(TTS_FILE_ROOT) / user_id
+        user_tts_dir.mkdir(parents=True, exist_ok=True)
+        output_file = user_tts_dir / f"{file_id}.mp3"
+        try:
+            communicate = edge_tts.Communicate(text, voice)
+            await communicate.save(str(output_file))
+        except Exception as e:
+            # 捕获所有异常返回友好提示，防止异常冒泡导致 Agent 循环中断
+            logger.error(f"TTS 生成失败: user={user_id[:8]}, error={e}")
+            return f"语音生成失败：{e}。请稍后重试或改用文字阅读。"
+        duration = f"~{max(len(text) // 10, 1)}s"
+        if truncated:
+            duration += "（内容超长已截断）"
+        return json.dumps({
+            "file_id": file_id,
+            "audio_url": f"/api/v1/tts/{file_id}",
+            "duration_estimate": duration,
+        })
+
     # 全部工具注册表（名称 → 工具对象）
     all_tools = {
         "what_time_is_now": what_time_is_now,
@@ -460,6 +591,11 @@ def create_agent_tools(
         "get_related_notes_tool": get_related_notes_tool,
         "send_email": send_email,
         "generate_ppt_tool": generate_ppt_tool,
+        # 外部 API 工具（直接集成，外部 API 工具接入文档 §4）：模块级 @tool 直接引用；
+        # text_to_speech 为闭包（绑定 user_id，音频按用户目录隔离）
+        "translate_text": translate_text,
+        "wolfram_calculate": wolfram_calculate,
+        "text_to_speech": text_to_speech,
     }
 
     # ===== 工具组解析（P2-6 ToolRegistry）=====

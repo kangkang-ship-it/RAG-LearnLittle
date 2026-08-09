@@ -30,7 +30,11 @@ def _safe_str(value: Any, max_len: int = 500) -> str:
 
 def parse_tool_file_event(tool_name: str, tool_output: Any) -> Optional[Dict[str, Any]]:
     """
-    检测 PPT 工具输出，构造 tool_file 事件（设计方案 §6.3 第 1 段）
+    检测 PPT / TTS 工具输出，构造 tool_file 事件（设计方案 §6.3 第 1 段）
+
+    支持的工具：
+    - generate_ppt_tool → file_id / download_url / title / slide_count
+    - text_to_speech   → file_id / audio_url / duration_estimate
 
     Args:
         tool_name: 工具名
@@ -44,7 +48,7 @@ def parse_tool_file_event(tool_name: str, tool_output: Any) -> Optional[Dict[str
     而非原始字符串（内容在 .content），需先提取再解析——
     否则 tool_file 事件永不产出（前端收不到下载卡片）。
     """
-    if tool_name != "generate_ppt_tool" or not tool_output:
+    if tool_name not in ("generate_ppt_tool", "text_to_speech") or not tool_output:
         return None
     try:
         # ToolMessage → 提取 content（工具返回的原始字符串）

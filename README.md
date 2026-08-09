@@ -13,6 +13,7 @@
 ![ChromaDB](https://img.shields.io/badge/ChromaDB-1.0%2B-FC60A8)
 ![Redis](https://img.shields.io/badge/redis--py-5%2B-DC382D?logo=redis&logoColor=white)
 ![MySQL](https://img.shields.io/badge/MySQL-8%2B-4479A1?logo=mysql&logoColor=white)
+![MCP](https://img.shields.io/badge/MCP-LangChain--Adapters-009688)
 
 </div>
 
@@ -62,7 +63,11 @@
 | 🧠 **深度思考** | 前端开关控制主模型思考模式（质量与延迟可权衡）；附件场景自动关闭（视觉模型理解附件）；Plan / 分类器由环境变量独立控制 |
 | 🖼️ **多模态理解** | 图片 / 视频附件上传（视频抽帧），视觉模型解答 |
 | 📚 **RAG 知识库** | ChromaDB 向量检索 + BM25 混合召回 + bge-reranker 重排序 + LLM 摘要 |
-| 🛠️ **Agent 工具层** | 5 组 11 个工具（基础 / 笔记读 / 笔记写 / 回顾 / 邮件）关键词路由按需加载 + 全量兜底；工具调用审计落库、邮件安全校验与限流 |
+| 🛠️ **Agent 工具层** | 9 组 **15 个内置工具** + **MCP 动态工具**（数量随配置变化，当前 Tavily 白名单 2 个 + Fetch 全量）：关键词路由按需加载 + 全量兜底；工具调用审计落库、邮件安全校验与限流 |
+| 🌐 **MCP 联网能力** | Tavily 联网搜索 / URL 内容提取 + Fetch 通用网页抓取（转 Markdown），白名单注册进 "mcp" 组，Server 故障自动降级跳过 |
+| 🗣️ **语音合成** | Edge TTS 朗读（MP3，按用户目录隔离），对话中直接"朗读 / 读给我听"触发 |
+| 📊 **PPT 生成** | 关键词触发的讲解 PPT 生成（python-pptx 本地渲染，无额外额度）+ PPT 模板管理 |
+| 🌍 **外部 API 工具** | DeepL 高质量翻译 · Wolfram Alpha 精确计算 / 解方程 / 单位换算 |
 | 📓 **笔记系统** | 富文本编辑（TipTap）、模板、AI 自动补全 / 打标签 |
 | 🗑️ **回收站** | 笔记删除进入回收站，14 天自动彻底清除（定时任务） |
 | ✉️ **邮件功能** | QQ 邮箱注册验证，笔记以 Markdown / PDF 导出发送 |
@@ -82,14 +87,14 @@
 ================================================================= -->
 
 <div align="center">
-  <b>（架构图待补充）</b>
+  <b><img src="docs/System Architecture Diagram.png" alt="系统架构图" width="85%"/></b>
 </div>
 
 - **后端**：FastAPI + SQLAlchemy(async) + MySQL + Redis（会话缓存 / 流式缓冲）
-- **Agent 编排**：LangChain / LangGraph，ReAct 与 Plan-and-Execute 双模式；5 组工具关键词路由按需加载
+- **Agent 编排**：LangChain / LangGraph，ReAct 与 Plan-and-Execute 双模式；ToolRegistry 统一管理 9 组内置工具 + MCP 动态工具，关键词路由按需加载
 - **记忆**：滑动窗口 + 里程碑摘要 + Redis 热缓存的三级压缩
 - **检索**：ChromaDB 向量库 + BM25 + CrossEncoder 重排序（BAAI/bge-reranker-v2-m3）
-- **模型层**：DashScope（百炼）⇄ Ollama（本地）一键切换；Chat / Thinking / Vision / Classifier / Plan 多模型组合
+- **模型层**：DashScope（百炼）⇄ Ollama（本地）一键切换；Chat / Thinking / Embedding / Vision / Classifier / Plan 多模型组合
 - **基础设施**：APScheduler 定时任务（回收站清理、孤儿附件清理）、Langfuse 可观测性
 
 ---
@@ -100,7 +105,8 @@
 | :--- | :--- |
 | 前端 | React 19 · TypeScript · Vite · TailwindCSS · TipTap · Zustand · i18next |
 | 后端 | Python 3.10+ · FastAPI · uvicorn · APScheduler |
-| Agent | LangChain · LangGraph · langchain-openai（DashScope 兼容端点）· Langfuse |
+| Agent | LangChain · LangGraph · langchain-openai（DashScope 兼容端点）· langchain-mcp-adapters（MCP 客户端）· Langfuse |
+| 外部服务 | DeepL 翻译 · Wolfram Alpha 计算 · Edge TTS 语音 · Tavily 联网搜索（MCP） |
 | 数据库 | MySQL 8 · Redis · ChromaDB（向量库）· rank-bm25（混合召回） |
 | 模型 | DashScope（qwen 系列）/ Ollama（本地）· sentence-transformers（CrossEncoder 重排序）· tiktoken（Token 估算）· imageio-ffmpeg（视频抽帧） |
 
@@ -163,7 +169,7 @@ SMTP_PASSWORD=your_smtp_auth_code
 CREATE DATABASE raglearn CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-其他关键配置项（完整清单见 `.env.example`，共 40+ 项）：
+其他关键配置项（完整清单见 `.env.example`，共 59 项）：
 
 | 配置项 | 说明 | 必填 |
 | :--- | :--- | :--- |
@@ -172,6 +178,10 @@ CREATE DATABASE raglearn CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 | `JWT_SECRET` | Token 签名密钥，**生产环境必须修改** | 生产必改 |
 | `HF_HUB_OFFLINE` | HuggingFace 离线模式，默认 `1`（阻止在线下载模型） | 否 |
 | `TRACE_SINK` | 模型调用 trace 通道（`log` / `db` / `langfuse`），默认 `log,db`；选 `langfuse` 需自行部署或注册 Langfuse 平台 | 否 |
+| `TAVILY_API_KEY` | Tavily 联网搜索（MCP）。未配置时运行 keyless 模式（搜索可用，crawl/map/research 不可用） | 否 |
+| `DEEPL_API_KEY` | DeepL 翻译工具，未配置时返回"未配置"提示 | 否 |
+| `WOLFRAM_APP_ID` | Wolfram Alpha 计算工具，未配置时返回"未配置"提示 | 否 |
+| `PPT_ENGINE` | PPT 生成引擎（`python_pptx` 本地 / `aspose` 云端），默认 `python_pptx`；`aspose` 需另配 `ASPOSE_CLIENT_ID` / `ASPOSE_CLIENT_SECRET` | 否 |
 
 > 🖥️ 选择 `MODEL_PROVIDER=ollama`（本地）时，需配置 `OLLAMA_BASE_URL`（默认 `http://localhost:11434`）、`OLLAMA_CHAT_MODEL`、`OLLAMA_EMBED_MODEL`，并确保本地已拉取对应模型；视觉附件还需 `OLLAMA_VISION_MODEL`。
 
@@ -216,14 +226,16 @@ npm run dev
 | 认证 | `POST /auth/register` · `POST /auth/login` · `POST /auth/send-code` | 注册（邮箱验证码）/ 登录 / 发送验证码 |
 | 对话 | `POST /chat/query` | **Agent 流式对话（SSE）**，ReAct / Plan-Execute 混合路由 |
 | 对话 | `POST /chat/rag` | RAG 检索问答 |
-| 对话 | `POST /chat/files` · `GET /chat/files/{id}` | 上传 / 预览图片、视频附件 |
-| 会话 | `GET /chat/sessions` · `GET /chat/{id}/messages` · `PUT /chat/{id}/title` | 会话管理 |
+| 对话 | `POST /chat/files` · `GET /chat/files/{id}` · `DELETE /chat/files/{file_id}` | 上传 / 预览 / 删除（未绑定）附件 |
+| 会话 | `GET /chat/sessions` · `DELETE /chat/sessions/{id}` · `GET /chat/{id}/messages` · `PUT /chat/{id}/title` | 会话管理（列表 / 删除 / 历史 / 改名） |
 | 笔记 | `GET/POST /note` · `GET/PUT/DELETE /note/{id}` | 笔记 CRUD |
 | 笔记 | `GET /note/recycle-bin` · `POST /note/{id}/restore` · `DELETE /note/{id}/permanent` | 回收站 |
 | 笔记 | `POST /note/search` · `POST /note/autocomplete` · `POST /note/write-assistant` | 语义搜索 / AI 补全 / 写作辅助 |
 | 知识库 | `POST /knowledge/upload`（SSE 进度）· `GET /knowledge/documents` | 文档上传与管理 |
 | 回顾 | `GET /review/today` · `POST /review/{id}/complete` · `GET /review/stats` | 艾宾浩斯回顾 |
 | 模板 | `GET/POST /note-template` · `PUT/DELETE /note-template/{id}` | 笔记模板 |
+| PPT | `GET /ppt/{file_id}` · `POST /ppt-template/upload` · `GET/DELETE /ppt-template` | 下载生成的 PPT / PPT 模板管理 |
+| TTS | `GET /tts/{file_id}` | 下载 TTS 生成的 MP3 音频 |
 | 用量 | `GET /usage/summary` | 模型调用用量与费用 |
 | 健康 | `GET /health` · `GET /ready` | 存活 / 就绪探针 |
 
@@ -236,6 +248,7 @@ npm run dev
 | `thinking` | 思考阶段提示（`stage`: rag / processing / attachment） |
 | `response` | 逐 token 回复内容 |
 | `tool_start` / `tool_end` | 工具调用开始 / 完成（含耗时） |
+| `tool_file` | 工具产出文件（PPT / TTS），含 `file_id` 与下载地址，用于渲染下载卡片 |
 | `plan_start` / `plan_step` / `plan_step_start` / `plan_step_end` / `plan_synthesize` / `plan_complete` | Plan-and-Execute 全流程事件 |
 | `plan_fallback` | Plan 执行失败，自动降级为 ReAct |
 | `error` | 错误信息（含超时） |
@@ -249,12 +262,12 @@ npm run dev
 
 | 文件 | 作用 | 核心配置项 |
 | :--- | :--- | :--- |
-| `config/agent.yaml` | **Agent 行为配置**（系统核心） | 迭代上限、Plan-Execute 各阶段超时、L1 规则 + L2 LLM 分类、工具分组与关键词路由、Token 预算、记忆压缩阈值、邮件限流 |
+| `config/agent.yaml` | **Agent 行为配置**（系统核心） | 迭代上限、Plan-Execute 各阶段超时、L1 规则 + L2 LLM 分类、工具分组与关键词路由、MCP Server 配置（`mcp_servers` + 工具白名单）、Token 预算、记忆压缩阈值、邮件限流 |
 | `config/chroma.yaml` | 向量库配置 | 持久化目录、集合名、文本切片参数、重排序模型 |
 | `config/prompt.yaml` | 提示词模板配置 | 提示词加载相关 |
 | `config/pricing.yaml` | 模型定价种子 | 按 input / output token 单价计价（元 / 千 token），启动时 upsert 进 `model_pricing` 表 |
 
-`prompts/` 目录存放 12 个 Agent 提示词文件，可直接编辑调优，如 `main_prompt.txt`（主 Agent）、`plan_generation.txt`（计划生成）、`classify_complexity.txt`（L2 分类）、`rag_summarize.txt`（RAG 摘要）等。
+`prompts/` 目录存放 12 个 Agent 提示词文件，可直接编辑调优，如 `main_prompt.txt`（主 Agent，已声明 MCP 与外部 API 工具的使用规则）、`plan_generation.txt`（计划生成）、`classify_complexity.txt`（L2 分类）、`rag_summarize.txt`（RAG 摘要）等。
 
 ---
 
@@ -270,7 +283,7 @@ RAG_LearnLittleCode/          # 本地目录名可自由修改
 │   ├── rag/                 # RAG 核心（向量库、检索、RagService、任务队列）
 │   ├── routers/             # API 路由（chat / note / user / knowledge ...）
 │   ├── services/            # 业务服务（笔记、邮件、用量、记忆压缩、模板）
-│   ├── ai_service/          # Agent 编排（ReAct / Plan-Execute / 工具集 / 流式输出 / 中间件）
+│   ├── ai_service/          # Agent 编排（ReAct / Plan-Execute / 工具注册表 / MCP 管理器 / 流式输出 / 中间件）
 │   ├── utils/               # 模型工厂、Prompt 加载、Token 估算
 │   └── schemas/             # Pydantic 模型
 ├── config/                  # YAML 配置（agent / chroma / prompt / pricing）
@@ -281,7 +294,7 @@ RAG_LearnLittleCode/          # 本地目录名可自由修改
 ├── logs/                    # 日志输出目录（运行时生成）
 ├── tests/eval/              # AI 对话黄金评测器
 ├── docs/                    # 架构图与升级设计方案
-├── .env.example              # 环境变量模板（40+ 项，含完整注释）
+├── .env.example              # 环境变量模板（59 项，含完整注释）
 └── requirements.txt
 ```
 
@@ -311,7 +324,8 @@ pytest test_plan_execute.py -v   # Plan-and-Execute 流程测试
 
 - **流式 Token 统计**：DashScope 兼容模式下流式响应的 usage 可能为 null，影响成本统计精度
 - **多模态 + 深度思考**：视觉模型不支持思考模式，上传附件时自动走视觉模型，二者不可组合
-- **工具按需加载**：当前 `default_groups` 为全量加载兜底（关键词规则仅作加速），后续可改为纯按需加载以节省上下文窗口
+- **工具按需加载**：`default_groups` 为全量加载兜底（关键词规则仅作加速），后续可改为纯按需加载以节省上下文窗口
+- **MCP 依赖本机环境**：Tavily（npx）与 Fetch（uvx）MCP Server 需要 Node 环境与网络；任一 Server 连接失败自动降级跳过，不影响 Agent 主流程
 - **邮件限流**：`send_email` 限流为进程内滑动窗口（10 封 / 小时 / 用户），多进程部署需迁移至 Redis
 - **回收站**：笔记回收站最长保留 14 天，由定时任务自动彻底删除
 
@@ -334,13 +348,14 @@ pytest test_plan_execute.py -v   # Plan-and-Execute 流程测试
 
 - `config/agent.yaml` 是 Agent 行为中枢：工具分组、关键词路由、各阶段超时、Token 预算、记忆压缩阈值、邮件限流均可在此调整，修改后重启服务生效
 - `prompts/*.txt` 提示词可直接编辑，无需改代码
-- **新增工具**：在 `app/ai_service/agent_tools.py` 用 `@tool` 注册 → 加入 `config/agent.yaml` 的 `tool_groups` 与 `tool_routing.keyword_rules` → 用黄金评测器回归验证
+- **新增内置工具**：在 `app/ai_service/agent_tools.py` 用 `@tool` 注册 → 加入 `config/agent.yaml` 的 `tool_groups` 与 `tool_routing.keyword_rules` → 用黄金评测器回归验证
+- **新增 MCP 工具**：在 `config/agent.yaml` 的 `mcp_servers` 添加 Server 配置，用 `tools_include` 白名单过滤暴露的工具（自动注册进 "mcp" 组，随 `default_groups` 加载）
 
 ---
 
 ## 📚 文档
 
-- [系统架构图](docs/系统架构图.png)
+- [系统架构图（旧版）](docs/系统架构图.png) — 新版 AI 生成中，Prompt 见 [系统架构图AI生图Prompt.md](docs/系统架构图AI生图Prompt.md)
 - [ReAct 与 Plan-Execute 混合路由方案](docs/ReAct与Plan-Execute混合路由方案.md)
 - [AI 对话栏文件上传功能设计方案](docs/AI对话栏文件上传功能设计方案.md)
 - [邮箱验证与笔记回收站功能设计方案](docs/邮箱验证与笔记回收站功能设计方案.md)

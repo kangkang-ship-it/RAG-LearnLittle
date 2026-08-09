@@ -560,14 +560,24 @@ async def chat_query(
                 elif event.get("type") == "tool_file":
                     # 补全 AttachmentMeta 必填字段（file_type/original_name），
                     # 否则历史接口 MessageListResponse 校验 500（v1.6 修复）
-                    ppt_file_info = {
-                        "file_id": event.get("file_id"),
-                        "file_type": "ppt",
-                        "original_name": event.get("title") or "讲解PPT",
-                        "download_url": event.get("download_url"),
-                        "title": event.get("title"),
-                        "slide_count": event.get("slide_count"),
-                    }
+                    if event.get("name") == "text_to_speech":
+                        # TTS 语音：audio_url 随消息持久化，历史回放恢复播放/下载卡片
+                        ppt_file_info = {
+                            "file_id": event.get("file_id"),
+                            "file_type": "tts",
+                            "original_name": "语音朗读",
+                            "download_url": event.get("audio_url"),
+                            "duration_estimate": event.get("duration_estimate"),
+                        }
+                    else:
+                        ppt_file_info = {
+                            "file_id": event.get("file_id"),
+                            "file_type": "ppt",
+                            "original_name": event.get("title") or "讲解PPT",
+                            "download_url": event.get("download_url"),
+                            "title": event.get("title"),
+                            "slide_count": event.get("slide_count"),
+                        }
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
             if errored:

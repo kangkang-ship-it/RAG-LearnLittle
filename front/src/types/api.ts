@@ -171,7 +171,7 @@ export interface BatchOperation {
 /** 聊天附件元数据（对应后端 AttachmentMeta） */
 export interface AttachmentMeta {
   file_id: string;
-  file_type: 'image' | 'video' | 'ppt';
+  file_type: 'image' | 'video' | 'ppt' | 'tts';
   original_name: string;
   file_size?: number;
   mime_type?: string;
@@ -182,6 +182,8 @@ export interface AttachmentMeta {
   download_url?: string;
   title?: string;
   slide_count?: number;
+  // TTS 音频（file_type='tts' 时）
+  duration_estimate?: string;
 }
 
 /** 附件上传响应（对应后端 UploadResponse） */
@@ -354,6 +356,9 @@ export interface ToolFileInfo {
   download_url: string;
   slide_count?: number;
   title?: string;
+  // TTS 音频（name='text_to_speech' 时）
+  audio_url?: string;
+  duration_estimate?: string;
 }
 
 /** 知识库 SSE 消息 */

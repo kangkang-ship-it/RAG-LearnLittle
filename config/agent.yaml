@@ -127,6 +127,16 @@ tool_groups:
   # 命中关键词才加载，qwen3-max 的工具 schema 越少幻觉率越低，见设计方案 §4.2）
   ppt:
     - generate_ppt_tool
+  # 翻译组（外部 API：DeepL；不加入 default_groups，关键词触发，参照 ppt 组模式，
+  # 外部 API 工具接入文档 §5.1 工具组路由决策）
+  translate:
+    - translate_text
+  # 计算组（外部 API：Wolfram Alpha；关键词触发）
+  compute:
+    - wolfram_calculate
+  # 语音组（外部 API：Edge TTS；关键词触发）
+  tts:
+    - text_to_speech
 
 # 工具路由规则（关键词 → 工具组映射）
 tool_routing:
@@ -212,6 +222,24 @@ tool_routing:
       - "生成ppt"
       - "讲解ppt"
       - "整理成ppt"
+    translate:     # 翻译意图（外部 API 工具接入文档 §5.1 词表）
+      - "翻译"
+      - "翻译成"
+      - "translate"
+      - "英文翻译成中文"
+      - "中文翻译成英文"
+    compute:       # 计算意图
+      - "计算"
+      - "求解"
+      - "解方程"
+      - "方程"
+      - "单位换算"
+    tts:           # 语音意图
+      - "朗读"
+      - "读给我听"
+      - "转成语音"
+      - "转成音频"
+      - "念给我听"
 
 # MCP 动态工具配置（MCP 专项方案 Part A；工具注册进 tool_registry 的 "mcp" 组）
 mcp_servers:

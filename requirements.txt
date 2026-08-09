@@ -4,8 +4,8 @@ uvicorn[standard]>=0.34.0
 python-multipart>=0.0.18
 
 # ========== LLM & RAG ==========
-langchain>=0.3.0
-langchain-core>=0.3.0
+langchain>=1.3.0
+langchain-core>=1.3.3
 langchain-community>=0.3.0
 langchain-openai>=0.3.0
 langchain-ollama>=0.3.0
@@ -42,6 +42,8 @@ python-magic-bin>=0.4.14; sys_platform == "win32"
 imageio-ffmpeg>=0.5.0
 # PPT 生成（讲解 PPT 工具，设计方案 §8.1）
 python-pptx>=1.0.0
+# TTS 语音合成（笔记朗读，外部 API 工具接入文档 §4.3；传递依赖 aiohttp/certifi 等自动安装）
+edge-tts
 
 # ========== Token Counting ==========
 tiktoken>=0.7.0

@@ -45,9 +45,11 @@ class AttachmentMeta(BaseModel):
 
     v1.6：file_type 增加 "ppt"——PPT 下载信息随 assistant 消息持久化，
     历史回放从消息附件恢复下载卡片（设计方案 §7）。
+    v1.7：file_type 增加 "tts"——TTS 语音（text_to_speech）随消息持久化，
+    历史回放恢复音频播放/下载卡片（外部 API 工具接入文档 §10 C3）。
     """
     file_id: str
-    file_type: Literal["image", "video", "ppt"]
+    file_type: Literal["image", "video", "ppt", "tts"]
     original_name: str
     file_size: Optional[int] = None
     mime_type: Optional[str] = None
@@ -58,6 +60,8 @@ class AttachmentMeta(BaseModel):
     download_url: Optional[str] = None
     title: Optional[str] = None
     slide_count: Optional[int] = None
+    # TTS 音频（file_type="tts" 时）
+    duration_estimate: Optional[str] = None
 
 
 class UploadResponse(BaseModel):

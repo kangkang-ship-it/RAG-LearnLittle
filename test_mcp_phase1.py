@@ -120,8 +120,8 @@ async def main() -> int:
     ))
     all_names = set(tool_registry.resolve_names(None))
     checks.append(report(
-        "全量解析 = 12 内置 + 3 MCP",
-        len(all_names) == 15 and EXPECTED_TOOLS <= all_names,
+        "全量解析 = 12 内置 + 3 MCP + 3 外部 API",
+        len(all_names) == 18 and EXPECTED_TOOLS <= all_names,
         f"共 {len(all_names)} 个: {sorted(all_names)}",
     ))
 
