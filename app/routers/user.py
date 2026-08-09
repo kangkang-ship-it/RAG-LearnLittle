@@ -44,7 +44,7 @@ from app.utils.auth_utils import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
 )
 from app.db.redis_client import get_redis
-from app.utils.file_handler import validate_avatar_file, get_safe_filename, ensure_dir
+from app.utils.file_handler import validate_avatar_file, get_safe_filename, ensure_dir, read_upload_limited
 
 router = APIRouter()
 
@@ -555,8 +555,8 @@ async def upload_avatar(
     支持 PNG / JPG / WebP 格式，单文件上限 5MB。
     上传成功后自动更新用户 avatar 字段，返回可访问的头像 URL。
     """
-    # 读取文件内容
-    content = await file.read()
+    # 读取文件内容（分块限流，超限立即中断，防内存 DoS；头像上限 5MB）
+    content = await read_upload_limited(file, max_size_mb=5)
     file_size = len(content)
 
     # 校验头像文件（格式 + 大小）

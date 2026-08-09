@@ -5,7 +5,7 @@
  * 1. 左右分栏布局，左侧 2.5D 等距插画，右侧登录卡片
  * 2. 用户名 + 密码 + 验证码登录
  * 3. 登录成功后保存 Token 并跳转首页
- * 4. 密码显隐切换、记住密码、自动登录
+ * 4. 密码显隐切换、记住账号（仅保存用户名，明文密码严禁落盘）
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -109,7 +109,6 @@ export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [captchaInput, setCaptchaInput] = useState('');
   const [rememberPwd, setRememberPwd] = useState(true);
-  const [autoLogin, setAutoLogin] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const captchaCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -126,31 +125,18 @@ export default function Login() {
     refreshCaptcha();
   }, [refreshCaptcha]);
 
-  // 记住密码：页面加载时恢复保存的凭证
+  // 记住账号：页面加载时恢复保存的用户名（安全审查 P0-6：明文密码严禁落盘，
+  // 故此处只恢复用户名，不恢复密码；自动登录需后端签发一次性 remember-me 票据后才可支持）
   useEffect(() => {
     const saved = localStorage.getItem('remembered_login');
     if (saved) {
       try {
-        const { username: u, password: p } = JSON.parse(saved);
+        const { username: u } = JSON.parse(saved);
         setUsername(u || '');
-        setPassword(p || '');
         setRememberPwd(true);
       } catch { /* ignore */ }
     }
   }, []);
-
-  // 自动登录：如果凭证已恢复且开启了自动登录，自动提交
-  useEffect(() => {
-    const autoLoginFlag = sessionStorage.getItem('auto_login_pending');
-    if (autoLoginFlag && username && password) {
-      sessionStorage.removeItem('auto_login_pending');
-      // 延迟一帧确保组件完全挂载
-      requestAnimationFrame(() => {
-        const form = document.querySelector('form');
-        if (form) form.requestSubmit();
-      });
-    }
-  }, [username, password]);
 
   useEffect(() => {
     if (!localStorage.getItem('device_id')) {
@@ -187,16 +173,11 @@ export default function Login() {
       return;
     }
 
-    // 记住密码：将凭证存入 localStorage
+    // 记住账号：仅保存用户名（安全审查 P0-6，明文密码不落盘）
     if (rememberPwd) {
-      localStorage.setItem('remembered_login', JSON.stringify({ username, password }));
+      localStorage.setItem('remembered_login', JSON.stringify({ username }));
     } else {
       localStorage.removeItem('remembered_login');
-    }
-
-    // 自动登录标记
-    if (autoLogin) {
-      sessionStorage.setItem('auto_login_pending', '1');
     }
 
     setLoading(true);
@@ -352,8 +333,7 @@ export default function Login() {
               {/* 选项栏 */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4">
-                  <SquareCheckbox checked={rememberPwd} onChange={() => setRememberPwd(!rememberPwd)} label="记住密码" />
-                  <SquareCheckbox checked={autoLogin} onChange={() => setAutoLogin(!autoLogin)} label="自动登录" />
+                  <SquareCheckbox checked={rememberPwd} onChange={() => setRememberPwd(!rememberPwd)} label="记住账号" />
                 </div>
                 <button type="button" className="text-[#1677ff] hover:text-blue-700 transition-colors text-sm">
                   忘记密码？

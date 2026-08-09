@@ -29,6 +29,31 @@ from app.models.user import User
 # ========== 配置 ==========
 
 JWT_SECRET = os.getenv("JWT_SECRET", "change-me-in-production")
+
+# 已知的公开默认密钥：生产环境漏配时直接拒绝启动，
+# 避免攻击者使用公开密钥伪造任意用户的 token
+_INSECURE_JWT_SECRETS = {
+    "change-me-in-production",
+    "raglearn-dev-secret-key-change-in-production-2026",
+}
+
+
+def validate_jwt_secret() -> None:
+    """
+    校验 JWT_SECRET 是否安全（应用启动阶段调用）
+
+    未配置、使用公开默认值或过短的密钥时抛出 RuntimeError 拒绝启动。
+    生成强随机密钥示例：
+        python -c "import secrets; print(secrets.token_hex(32))"
+    """
+    if not JWT_SECRET or JWT_SECRET in _INSECURE_JWT_SECRETS or len(JWT_SECRET) < 16:
+        raise RuntimeError(
+            "JWT_SECRET 未配置或使用公开默认值，拒绝启动。"
+            "请在 .env 中配置强随机密钥（至少 16 字符），例如："
+            "python -c \"import secrets; print(secrets.token_hex(32))\""
+        )
+
+
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))

@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from fastapi import UploadFile
+
 from app.core.logger_handler import logger
 from app.core.failed_response import BusinessError, ErrorCode
 
@@ -236,6 +238,47 @@ def validate_upload_file(
         )
     
     return ext
+
+
+async def read_upload_limited(file: UploadFile, max_size_mb: int) -> bytes:
+    """
+    分块读取上传文件，超过大小上限立即中断（防内存 DoS）
+
+    相比 `await file.read()` 一次性全量读入内存，本函数按 1MB 分块累计，
+    超过 max_size_mb 即抛错，避免恶意客户端通过超大文件打爆进程内存。
+
+    Args:
+        file: Starlette UploadFile
+        max_size_mb: 最大大小（MB）
+
+    Returns:
+        文件完整字节
+
+    Raises:
+        BusinessError: 文件超过大小限制
+    """
+    max_size_bytes = max_size_mb * 1024 * 1024
+
+    # 预检：UploadFile.size 为已 spool 到临时文件的实际大小（不占内存），超限直接拒绝
+    declared_size = getattr(file, "size", None)
+    if declared_size is not None and declared_size > max_size_bytes:
+        raise BusinessError(
+            code=ErrorCode.FILE_TOO_LARGE,
+            detail=f"文件大小 {declared_size / 1024 / 1024:.1f}MB 超过限制 {max_size_mb}MB"
+        )
+
+    content = bytearray()
+    while True:
+        chunk = await file.read(1024 * 1024)  # 1MB 分块
+        if not chunk:
+            break
+        content.extend(chunk)
+        if len(content) > max_size_bytes:
+            raise BusinessError(
+                code=ErrorCode.FILE_TOO_LARGE,
+                detail=f"文件超过大小限制 {max_size_mb}MB，已中断读取"
+            )
+    return bytes(content)
 
 
 def get_safe_filename(filename: str) -> str:

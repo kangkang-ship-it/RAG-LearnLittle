@@ -257,10 +257,13 @@ mcp_servers:
   # #2 Fetch：通用网页抓取（Phase 1 必接）
   # 必须固定 mcp<2 —— mcp-server-fetch 2026.7.10 与 mcp SDK 2.x 不兼容
   # （2.x 移除了 mcp.shared.exceptions.McpError，不固定时启动即 ImportError，实测 2026-08-08）
+  # 安全（审查 P0-7）：fetch 接收任意 url，代码侧已加 SSRF 地址守卫（仅公网 http/https），
+  # 此处 tools_include 白名单兜底，避免未来版本暴露额外工具
   fetch:
     transport: "stdio"
     command: "uvx"
     args: ["--with", "mcp<2", "mcp-server-fetch"]
+    tools_include: ["fetch"]
     enabled: true
 
 # 安全配置（P2-3 安全护栏）

@@ -16,11 +16,13 @@ MCP 客户端生命周期管理（MCP 专项方案 Part A / 实施文档 §5）
 """
 
 import os
+from functools import wraps
 from typing import Dict, List
 
 from app.ai_service.tool_registry import init_tool_registry, tool_registry
 from app.core.logger_handler import logger
 from app.utils.config import get_mcp_servers_config
+from app.utils.ssrf_guard import extract_url_arg, validate_public_url
 
 
 class MCPManager:
@@ -114,11 +116,68 @@ class MCPManager:
                 logger.info(f"[mcp] {server_name}: 工具 '{name}' 不在白名单（tools_include）内，跳过")
                 continue
             try:
+                tool = _wrap_ssrf_guard(tool)
                 tool_registry.register_tool(name, tool, group="mcp")
                 self._registered.append(name)
                 logger.info(f"[mcp] 工具注册: {name} ← server '{server_name}'")
             except ValueError as e:
                 logger.warning(f"[mcp] {server_name}: 工具注册被拒绝（跳过）: {e}")
+
+
+def _wrap_ssrf_guard(tool):
+    """
+    对 URL 抓取类 MCP 工具加 SSRF 地址守卫（安全审查 P0-7）
+
+    通过 args_schema 判定工具是否接收 url 参数（fetch / tavily_extract /
+    tavily_crawl / tavily_map 等），是则包装 _run/_arun：调用前校验 URL 只能
+    指向公网 http/https 地址，私网/回环/云元数据地址直接拒绝。
+
+    被拦截时返回错误文案而非抛异常：与 langchain-mcp-adapters 的
+    handle_tool_errors=True 语义一致，LLM 以普通工具结果看到"拒绝原因"，
+    可自纠错（提示用户更换合法外网 URL），不会中断 Agent 运行。
+    """
+    args_schema = getattr(tool, "args_schema", None)
+    model_fields = getattr(args_schema, "model_fields", None) or {}
+    if "url" not in model_fields:
+        return tool  # 无 url 参数的工具（如 tavily_search）无需守卫
+
+    original_run = getattr(tool, "_run", None)
+    original_arun = getattr(tool, "_arun", None)
+    if original_arun is None:
+        return tool  # 无异步入口，跳过（MCP 工具均为 StructuredTool，正常不会走到）
+
+    def _guard_error(url, err: Exception) -> str:
+        return (
+            f"拒绝抓取不安全地址: {str(url)[:200]} — {err}。"
+            "仅允许公网 http/https 地址，请提示用户更换为合法外网 URL。"
+        )
+
+    if original_run is not None:
+        @wraps(original_run)
+        def _guarded_run(*args, **kwargs):
+            url = extract_url_arg(args, kwargs)
+            if url:
+                try:
+                    validate_public_url(url)
+                except ValueError as e:
+                    return _guard_error(url, e)
+            return original_run(*args, **kwargs)
+
+        tool._run = _guarded_run
+
+    @wraps(original_arun)
+    async def _guarded_arun(*args, **kwargs):
+        url = extract_url_arg(args, kwargs)
+        if url:
+            try:
+                validate_public_url(url)
+            except ValueError as e:
+                return _guard_error(url, e)
+        return await original_arun(*args, **kwargs)
+
+    tool._arun = _guarded_arun
+    logger.info(f"[mcp] 工具已加 SSRF 地址守卫: {getattr(tool, 'name', '')}")
+    return tool
 
 
 # 全局单例

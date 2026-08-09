@@ -31,6 +31,7 @@ from app.schemas.chat import (
 )
 from app.utils.auth_utils import get_current_user_id
 from app.utils.time_utils import to_utc_iso
+from app.utils.file_handler import read_upload_limited
 from app.ai_service.chat_route import ChatRouteContext
 from app.ai_service.chat_graph import stream_chat_graph
 from app.services.chat_service import ChatService
@@ -709,7 +710,9 @@ async def upload_chat_file(
     用户配额（USER_STORAGE_QUOTA_MB）。
     上传后附件为孤儿状态（未绑定会话），24h 内未随消息发送会被定时清理。
     """
-    content = await file.read()
+    # 分块限流读取（上限取图片/视频两者最大 50MB，防内存 DoS；
+    # 具体类型限制由 chat_attachment_service 按 magic bytes 校验）
+    content = await read_upload_limited(file, max_size_mb=50)
     async with async_session_factory() as db:
         attachment = await chat_attachment_service.save_upload(
             db, user_id, file.filename or "", content

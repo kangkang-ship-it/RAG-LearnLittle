@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.logger_handler import logger
 from app.core.failed_response_register import register_exception_handlers
+from app.core.metrics import MetricsMiddleware
 from app.core.model_trace import start_trace_bus, stop_trace_bus
 from app.db.database import init_db, close_db
 from app.db.redis_client import init_redis, close_redis
@@ -85,7 +86,10 @@ class BackgroundInitManager:
         # MCP 客户端：无状态对象（配置 + 已注册工具），__init__ 中引用即可；
         # 真正的子进程拉起在 init_mcp()（独立后台任务）中执行
         self.mcp_manager = None
-    
+
+        # 后台初始化失败原因（None=成功或尚未失败，供 /ready 探针展示）
+        self.init_error = None
+
     async def run(self):
         """
         执行后台初始化（三个阶段）
@@ -114,8 +118,9 @@ class BackgroundInitManager:
             logger.info("后台初始化 - 阶段 4: RagService 完成 ✓")
             
         except Exception as e:
+            self.init_error = str(e)
             logger.error(f"后台初始化失败: {e}")
-    
+
     async def _init_models(self):
         """初始化 AI 模型（Chat + Embedding + Vision + Classifier + Plan）"""
         try:
@@ -258,7 +263,11 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 50)
     logger.info("RAG LearnLittle 启动中...")
     logger.info("=" * 50)
-    
+
+    # 0. 安全校验：JWT_SECRET 必须是强随机值（公开默认密钥直接拒绝启动）
+    from app.utils.auth_utils import validate_jwt_secret
+    validate_jwt_secret()
+
     # 1. 初始化数据库
     await init_db()
 
@@ -271,17 +280,32 @@ async def lifespan(app: FastAPI):
     redis = await init_redis()
     app.state.redis = redis
 
-    # 4. 创建测试用户（本地开发用）
-    await _create_test_user()
+    # 4. 创建测试用户（仅非生产环境；生产环境需显式 ENABLE_TEST_USER=true 才创建）
+    app_env = _clean_env("APP_ENV", "development", ["development", "production"])
+    enable_test_user = os.getenv("ENABLE_TEST_USER", "false").lower() in ("true", "1", "yes")
+    if app_env != "production" or enable_test_user:
+        await _create_test_user()
+    else:
+        logger.info("生产环境（APP_ENV=production）：跳过测试用户创建，如需创建请设置 ENABLE_TEST_USER=true")
 
-    # 5. 后台异步初始化重型资源
-    asyncio.create_task(init_manager.run())
+    # 5. 后台异步初始化重型资源（完成后标记就绪，供 /ready 探针使用）
+    async def _run_init_and_mark_ready():
+        try:
+            await init_manager.run()
+        except Exception as e:
+            # run() 内部已捕获异常，此处仅兜底，避免任务异常导致 /ready 永不就绪
+            logger.error(f"后台初始化任务异常: {e}")
+        finally:
+            app.state.init_complete = True
+            app.state.init_error = init_manager.init_error
+
+    asyncio.create_task(_run_init_and_mark_ready())
 
     # 5.1 后台初始化 MCP 工具（独立任务，与模型加载并行；失败仅降级，不影响主流程）
     asyncio.create_task(init_manager.init_mcp())
 
     # 6. 启动定时任务（reload 模式跳过，避免 uvicorn fork 子进程导致重复执行）
-    reload = os.getenv("UVICORN_RELOAD", "true").lower() not in ("false", "0", "no")
+    reload = os.getenv("UVICORN_RELOAD", "false").lower() in ("true", "1", "yes")
     if not reload:
         from app.core.scheduler import init_scheduler
         init_scheduler()
@@ -313,9 +337,10 @@ async def lifespan(app: FastAPI):
 
 async def _create_test_user():
     """
-    创建测试用户 admin/admin1234（仅本地开发环境）
-    
+    创建测试用户 admin/admin1234（仅开发/测试环境，由 lifespan 按 APP_ENV 门控）
+
     如果用户已存在则跳过。
+    注意：生产环境默认不调用本函数；即使显式启用也不得使用该弱口令，应通过管理脚本初始化。
     """
     from app.db.database import async_session_factory
     from app.models.user import User
@@ -335,7 +360,7 @@ async def _create_test_user():
         )
         session.add(user)
         await session.commit()
-        logger.info("测试用户创建成功: admin / admin1234")
+        logger.info("测试用户创建成功: admin（仅开发/测试环境）")
 
 
 # 创建 FastAPI 应用
@@ -350,11 +375,22 @@ app = FastAPI(
 # ========== 中间件 ==========
 
 # CORS 中间件
-cors_origins = os.getenv("CORS_ORIGINS", "*").split(",")
+# 浏览器规范禁止 allow_origins=["*"] 与 allow_credentials=True 组合：
+# 带凭据时中间件会回显任意请求 Origin，等于允许任意站点跨域带凭据调用。
+# 因此出现 "*" 时强制关闭 credentials（并告警），生产建议显式配置域名白名单。
+cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
+allow_credentials = True
+if "*" in cors_origins:
+    cors_origins = ["*"]
+    allow_credentials = False
+    logger.warning(
+        "CORS_ORIGINS 使用通配符 '*'，已关闭 allow_credentials（凭据请求将不被允许）。"
+        "生产环境建议配置具体前端域名白名单，如: CORS_ORIGINS=https://app.example.com"
+    )
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_credentials=True,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -381,6 +417,9 @@ async def add_process_time_header(request: Request, call_next):
     
     return response
 
+
+# Prometheus 指标采集中间件（审查 P1-2；注意需在 CORS 中间件之后注册）
+app.add_middleware(MetricsMiddleware)
 
 # 注册全局异常处理器
 register_exception_handlers(app)
@@ -456,9 +495,10 @@ if __name__ == "__main__":
     from logging.handlers import TimedRotatingFileHandler
     from pathlib import Path
 
-    # 调试模式：设置环境变量 UVICORN_RELOAD=false 或通过 launch.json 使用 --no-reload
-    # 原因：reload=True 会 fork 子进程，导致 VSCode 断点无法命中
-    reload = os.getenv("UVICORN_RELOAD", "true").lower() not in ("false", "0", "no")
+    # 热重载（审查 P1-2：生产默认关闭；开发时显式设置 UVICORN_RELOAD=true 开启）
+    # 说明：reload=True 会 fork 子进程，导致 VSCode 断点无法命中，
+    #       且生产环境以 reload 模式运行会带来双进程守护与热重载风险
+    reload = os.getenv("UVICORN_RELOAD", "false").lower() in ("true", "1", "yes")
 
     # 安全解析 LOG_LEVEL（防止内联注释被当作值，如 "DEBUG  # 注释"）
     _valid_log_levels = ["critical", "error", "warning", "info", "debug", "trace"]

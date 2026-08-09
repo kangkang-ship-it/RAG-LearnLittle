@@ -34,7 +34,10 @@ from app.db.database import get_db
 from app.models.knowledge import KnowledgeDocument
 from app.schemas.knowledge import KnowledgeDocumentResponse, KnowledgeDocumentListResponse
 from app.utils.auth_utils import get_current_user_id
-from app.utils.file_handler import validate_upload_file, calculate_md5_bytes, get_safe_filename, ensure_dir
+from app.utils.file_handler import (
+    validate_upload_file, calculate_md5_bytes, get_safe_filename, ensure_dir,
+    read_upload_limited,
+)
 
 router = APIRouter()
 
@@ -216,15 +219,17 @@ async def _process_document_with_progress(
             chunk_count=chunk_count,
         )
         new_db.add(doc)
-        await new_db.commit()
+        # 只 flush 生成 doc.id（未提交），向量写入成功后才 commit：
+        # 避免出现"DB 已提交但向量失败、文档永远不可检索"的数据不一致（审查 P0-8）
+        await new_db.flush()
         await new_db.refresh(doc)
 
-        # 调用 VectorStore 写入 ChromaDB
+        # 调用 VectorStore 写入 ChromaDB（先写向量，失败即回滚 DB 并清理文件）
         if chunks:
             try:
                 from app.rag.vector_store import VectorStoreService
                 vector_store = VectorStoreService()
-                
+
                 chunk_ids = [f"{doc.id}_{i}" for i in range(chunk_count)]
                 metadatas = [
                     {
@@ -240,7 +245,7 @@ async def _process_document_with_progress(
                     }
                     for i in range(chunk_count)
                 ]
-                
+
                 await vector_store.upsert_document(
                     documents=chunks,
                     metadatas=metadatas,
@@ -249,7 +254,17 @@ async def _process_document_with_progress(
                 )
                 logger.info(f"向量写入成功: doc_id={doc.id}, chunks={chunk_count}")
             except Exception as ve:
-                logger.error(f"向量写入失败: doc_id={doc.id}, error={ve}")
+                # 回滚 DB（session 关闭时自动回滚未提交事务）+ 清理已落盘文件
+                try:
+                    Path(file_path).unlink(missing_ok=True)
+                except Exception as fe:
+                    logger.warning(f"清理入库失败的文件失败: {fe}")
+                logger.error(f"向量写入失败，文档已回滚: doc_id={doc.id}, error={ve}")
+                raise RuntimeError("向量化入库失败，文档未保存，请稍后重试") from ve
+
+        # 向量写入成功（或文档无可分片内容），提交 DB
+        await new_db.commit()
+        await new_db.refresh(doc)
 
     yield _make_sse_event({
         "event_type": "processing",
@@ -286,8 +301,8 @@ async def upload_document(
     """
     max_size = int(os.getenv("MAX_UPLOAD_SIZE_MB", "50"))
 
-    # 读取文件内容
-    content = await file.read()
+    # 读取文件内容（分块限流，超限立即中断，防内存 DoS）
+    content = await read_upload_limited(file, max_size)
     file_size = len(content)
 
     # 校验文件
