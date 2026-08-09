@@ -12,6 +12,7 @@
 """
 
 import os
+import re
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -366,6 +367,74 @@ class ChatAttachmentService:
         if attachments:
             logger.info(f"会话级联清理附件: session={session_id[:12]}, count={len(attachments)}")
         return len(attachments)
+
+    async def cleanup_session_tool_files(
+        self, db: AsyncSession, session_id: str, user_id: str
+    ) -> int:
+        """
+        会话删除时清理工具产出文件（PPT/TTS 物理文件，bug 修复）
+
+        PPT/TTS 文件不落 chat_attachments 表，仅通过消息 attachments_json
+        （file_type=ppt/tts + file_id）引用；删除会话时不清理会残留孤儿文件
+        （TTS 无 TTL 清理机制，会永久占用磁盘）。
+
+        由路由层调用（DELETE /chat/sessions/{session_id}），
+        须在 DatabaseSessionManager.delete_session（删消息行）之前执行。
+
+        Args:
+            db: 数据库会话
+            session_id: 会话 ID
+            user_id: 用户 ID（目录归属）
+
+        Returns:
+            清理的文件数（pptx/json/mp3 按物理文件计）
+        """
+        from app.models.chat import ChatMessage
+        from app.routers.tts_router import TTS_FILE_ROOT
+        from app.services.ppt_service import PPT_FILE_ROOT
+
+        query = select(ChatMessage).where(
+            ChatMessage.session_id == session_id,
+            ChatMessage.attachments_json.isnot(None),
+        )
+        result = await db.execute(query)
+        messages = list(result.scalars().all())
+
+        removed = 0
+        for msg in messages:
+            for att in msg.attachments_json or []:
+                if not isinstance(att, dict):
+                    continue
+                ftype = att.get("file_type")
+                fid = att.get("file_id")
+                if ftype not in ("ppt", "tts") or not fid:
+                    continue
+                # 防御：file_id 必须为 uuid4().hex（32 位小写十六进制），
+                # 防止脏数据/异常写入的路径穿越字符进入文件系统
+                if not re.fullmatch(r"[0-9a-f]{32}", str(fid)):
+                    logger.warning(f"跳过非法工具文件 file_id: {fid}")
+                    continue
+                if ftype == "ppt":
+                    user_dir = Path(PPT_FILE_ROOT) / user_id
+                    for suffix in (".pptx", ".json"):
+                        target = user_dir / f"{fid}{suffix}"
+                        if target.is_file():
+                            try:
+                                target.unlink()
+                                removed += 1
+                            except OSError as e:
+                                logger.warning(f"PPT 文件清理失败: {target} - {e}")
+                else:  # tts
+                    target = Path(TTS_FILE_ROOT) / user_id / f"{fid}.mp3"
+                    if target.is_file():
+                        try:
+                            target.unlink()
+                            removed += 1
+                        except OSError as e:
+                            logger.warning(f"TTS 文件清理失败: {target} - {e}")
+        if removed:
+            logger.info(f"会话工具文件清理: session={session_id[:12]}, files={removed}")
+        return removed
 
     async def cleanup_orphans(self, db: AsyncSession, ttl_hours: int = 24) -> int:
         """

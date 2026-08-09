@@ -842,12 +842,16 @@ async def delete_session(
     """
     删除指定会话及其所有消息
 
-    级联清理会话附件（文件 + chat_attachments 行）：
+    级联清理会话文件（图片/视频附件 + PPT/TTS 工具产出文件）：
     先清附件（路由层职责，DatabaseSessionManager.delete_session 保持纯 DB 职责），
     再删会话/消息（ORM cascade），最后统一 commit。
     """
     async with async_session_factory() as db:
+        # ① 用户上传的图片/视频附件（chat_attachments 表 + 文件）
         await chat_attachment_service.cleanup_by_session(db, session_id, user_id)
+        # ② 工具产出文件（PPT/TTS，仅经消息 attachments_json 引用，不落表）
+        await chat_attachment_service.cleanup_session_tool_files(db, session_id, user_id)
+        # ③ 删除会话/消息（ORM cascade）
         await session_manager.delete_session(db, session_id, user_id)
         await db.commit()
     return success_response(message="会话已删除")
