@@ -87,7 +87,7 @@
 ================================================================= -->
 
 <div align="center">
-  <b><img src="docs/System Architecture Diagram.png" alt="系统架构图" width="85%"/></b>
+  <b><img src="docs/System_Architecture_Diagram.png" alt="系统架构图" width="85%"/></b>
 </div>
 
 - **后端**：FastAPI + SQLAlchemy(async) + MySQL + Redis（会话缓存 / 流式缓冲）
@@ -390,8 +390,7 @@ npm run build     # tsc --noEmit + vite build（tsconfig 已开启 strict）
 
 ## 📚 文档
 
-- [系统架构图（旧版）](docs/系统架构图.png) — 新版 AI 生成中，Prompt 见 [系统架构图AI生图Prompt.md](docs/系统架构图AI生图Prompt.md)
-- [ReAct 与 Plan-Execute 混合路由方案](docs/ReAct与Plan-Execute混合路由方案.md)
+- [系统架构图](docs/System_Architecture_Diagram.png)
 - [AI 对话栏文件上传功能设计方案](docs/AI对话栏文件上传功能设计方案.md)
 - [邮箱验证与笔记回收站功能设计方案](docs/邮箱验证与笔记回收站功能设计方案.md)
 - [更多升级设计方案](docs/)
@@ -400,12 +399,8 @@ npm run build     # tsc --noEmit + vite build（tsconfig 已开启 strict）
 
 ## 📄 License
 
-[MIT](LICENSE) © 2026
+[MIT](LICENSE) © 2026 [Qoin](https://github.com/qiaojoin586-droid)
 
-<!--
-TODO 清单：
-- [x] 添加 LICENSE 文件（MIT）
-- [x] 填写仓库地址
-- [ ] 补充界面截图（docs/screenshots/）
-- [ ] 补充系统架构图（docs/）
--->
+本项目基于 **MIT 协议**开源：允许自由使用、修改与分发，需保留版权声明。
+
+> 🔗 仓库：[RAG_LearnLittleCode](https://github.com/qiaojoin586-droid/RAG_LearnLittleCode.git) · 📚 [更多设计文档](docs/)
