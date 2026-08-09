@@ -39,7 +39,8 @@ bcrypt>=4.0.0,<5.0.0
 # ========== File Processing ==========
 pymupdf>=1.25.0
 pillow>=11.0.0
-python-magic-bin>=0.4.14; sys_platform == "win32"
+# 注：python-magic-bin 已移除——项目代码零引用（magic bytes 校验为自研 _match_magic），
+# 且该包仅有 Windows wheel，导致 Linux CI 安装 requirements.lock 失败（2026-08-09）
 # 视频抽帧（捆绑 ffmpeg 二进制；离线部署需预置 wheel）
 imageio-ffmpeg>=0.5.0
 # PPT 生成（讲解 PPT 工具，设计方案 §8.1）

@@ -123,7 +123,6 @@ pytest-mock==3.15.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
 python-jose==3.5.0
-python-magic-bin==0.4.14
 python-multipart==0.0.32
 python-pptx==1.0.2
 pywin32==312

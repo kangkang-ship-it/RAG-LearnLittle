@@ -10,7 +10,8 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
-# 系统库: libmagic（python-magic）、ffmpeg（视频抽帧）、构建工具（部分 wheel 需编译）
+# 系统库: libmagic（langchain document_loaders 延迟导入可选使用，python-magic-bin 已移除）、
+#        ffmpeg（视频抽帧）、构建工具（部分 wheel 需编译）
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential libmagic1 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
