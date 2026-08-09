@@ -55,9 +55,11 @@ interface Props {
   /** 用户头像 URL（store 中可能为 null） */
   userAvatar?: string | null;
   plan: PlanDisplayState;
+  /** 深度思考模式的实时思考内容（thinking 事件，审查 B+C） */
+  thinkingText?: string;
 }
 
-export default function MessageBubble({ msg, isLast, isStreaming, userAvatar, plan }: Props) {
+export default function MessageBubble({ msg, isLast, isStreaming, userAvatar, plan, thinkingText }: Props) {
   const isUser = msg.role === 'user';
 
   return (
@@ -83,7 +85,8 @@ export default function MessageBubble({ msg, isLast, isStreaming, userAvatar, pl
             currentTool={plan.currentTool}
           />
         )}
-        {/* AI 思考加载态：内容为空时显示"正在思考" + 3 个跳动圆点（demo 规格一致） */}
+        {/* AI 思考加载态：内容为空时显示"正在思考" + 3 个跳动圆点（demo 规格一致）；
+            深度思考模式附加实时思考内容（审查 B+C，最多展示 3 行避免刷屏） */}
         {!isUser && !msg.content && (
           <div className="thinking-loading" role="status" aria-live="polite">
             <span>正在思考</span>
@@ -92,6 +95,11 @@ export default function MessageBubble({ msg, isLast, isStreaming, userAvatar, pl
               <span className="thinking-dot" />
               <span className="thinking-dot" />
             </span>
+            {thinkingText && (
+              <div className="mt-1.5 text-xs text-[var(--color-text-tertiary)] whitespace-pre-wrap line-clamp-3 leading-relaxed">
+                {thinkingText}
+              </div>
+            )}
           </div>
         )}
         {!isUser ? (

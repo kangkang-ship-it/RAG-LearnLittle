@@ -47,8 +47,10 @@ export default function AIChat() {
 
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
-  // 思考阶段日志仍在 SSE 回调中收集（保留收集便于将来恢复展示），当前 UI 仅显示"正在思考"加载动画
+  // 思考阶段日志仍在 SSE 回调中收集（保留收集便于将来恢复展示）
   const [, setThinkingStages] = useState<{ stage: string; content: string }[]>([]);
+  // 深度思考模式的实时思考内容（thinking 事件，审查 B+C：显示思考进度消除等待焦虑）
+  const [thinkingText, setThinkingText] = useState('');
   // 深度思考开关（默认关闭；开启后请求带 enable_thinking=true，后端切换思考模型）
   const [enableThinking, setEnableThinking] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -311,6 +313,7 @@ export default function AIChat() {
     setSelectedNotes([]);
     setIsStreaming(true);
     setThinkingStages([]);
+    setThinkingText('');
     // 重置 Plan 状态
     setPlanGoal('');
     setPlanSteps([]);
@@ -353,6 +356,7 @@ export default function AIChat() {
         updateLastAssistantMessage(pendingContentRef.current);
         pendingContentRef.current = '';
       }
+      setThinkingText('');
     };
 
     try {
@@ -367,6 +371,8 @@ export default function AIChat() {
         {
           onThinking: (stage, content) => {
             setThinkingStages((prev) => [...prev, { stage, content }]);
+            // 深度思考模式：实时更新思考内容供气泡展示（stage=thinking 为 reasoning_content）
+            if (stage === 'thinking') setThinkingText(content);
           },
           onResponse: (content) => {
             accumulated += content;
@@ -541,6 +547,7 @@ export default function AIChat() {
             isStreaming={isStreaming}
             userAvatar={userAvatar}
             plan={planState}
+            thinkingText={thinkingText}
           />
         ))}
         <div ref={messagesEndRef} />

@@ -91,6 +91,10 @@ async def react_events(ctx: ChatRouteContext, timeout: int) -> AsyncGenerator[di
         # （含 generate_ppt_tool 的生成进度）对前端可见
         elif event_type in ("tool_start", "tool_end", "tool_file"):
             yield event
+        # ★ 思考过程实时转发（审查 B+C）：深度思考模式下 reasoning_content
+        # 作为 thinking 事件推送，前端显示思考进度（消除零反馈等待焦虑）
+        elif event_type == "thinking":
+            yield event
         # stream_done 等其余事件不转发（与现状一致）
 
 

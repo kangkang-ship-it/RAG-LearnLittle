@@ -590,7 +590,10 @@ async def chat_query(
                 ppt_service=getattr(init_manager, "ppt_service", None),
                 attachment_content=attachment_content,
                 attachment_names=attachment_names or None,
-                react_timeout=LLM_STREAM_TIMEOUT,
+                # 分层超时（审查 B）：单次 LLM 调用超时由模型 request_timeout 控制（120s，
+                # factory.py）；此处为整轮 Agent 执行总预算。深度思考模式下单次 thinking
+                # 调用可达 50-90s，整轮预算按模式放宽（与 plan_timeout 的 *2 策略对齐）
+                react_timeout=LLM_STREAM_TIMEOUT * 2 if data.enable_thinking else LLM_STREAM_TIMEOUT,
                 plan_timeout=LLM_STREAM_TIMEOUT * 2,
             )
 

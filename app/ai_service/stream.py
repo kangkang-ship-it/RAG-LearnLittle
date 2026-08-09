@@ -114,10 +114,17 @@ async def run_agent_stream(
                 # ---- 逐 token 输出 ----
                 if event_type == "on_chat_model_stream":
                     chunk = event["data"].get("chunk")
-                    if chunk and hasattr(chunk, "content") and chunk.content:
-                        accumulated += chunk.content
-                        consecutive_tool_calls = 0  # 有文本产出，重置计数
-                        yield {"type": "response", "content": chunk.content}
+                    if chunk:
+                        # ★ 思考过程实时转发（审查 B+C：qwen thinking 模式的思考内容
+                        # 在 additional_kwargs.reasoning_content，chunk.content 为空——
+                        # 此前深度思考期间前端零反馈，用户误以为卡死而刷新/重试）
+                        reasoning = (getattr(chunk, "additional_kwargs", None) or {}).get("reasoning_content")
+                        if reasoning:
+                            yield {"type": "thinking", "stage": "thinking", "content": reasoning}
+                        if hasattr(chunk, "content") and chunk.content:
+                            accumulated += chunk.content
+                            consecutive_tool_calls = 0  # 有文本产出，重置计数
+                            yield {"type": "response", "content": chunk.content}
 
                 # ---- 工具调用开始 ----
                 elif event_type == "on_tool_start":
@@ -195,7 +202,12 @@ async def run_agent_stream(
         return
     except Exception as e:
         logger.error(f"Agent 流式输出异常: {type(e).__name__}: {e}", exc_info=True)
-        yield {"type": "error", "content": f"生成失败: {str(e)}"}
+        # 单次 LLM 调用超时（request_timeout 触发，如 httpx.TimeoutException /
+        # openai.APITimeoutError）：给友好文案，细节仅入日志（审查 M15 同款原则）
+        if _is_timeout_error(e):
+            yield {"type": "error", "content": "AI 响应超时，请重试"}
+        else:
+            yield {"type": "error", "content": "生成失败，请稍后重试"}
         return
 
     # 触发 after_agent 钩子
@@ -203,3 +215,19 @@ async def run_agent_stream(
 
     # 流式完成事件（用 stream_done 避免与调用方的 done 混淆）
     yield {"type": "stream_done", "full_response": accumulated}
+
+
+def _is_timeout_error(e: Exception) -> bool:
+    """判断异常是否为超时类（单次 LLM 请求超时，而非业务错误）"""
+    import httpx
+
+    if isinstance(e, (asyncio.TimeoutError, httpx.TimeoutException)):
+        return True
+    # openai SDK 的超时异常（APITimeoutError 继承自 APIStatusError，非 httpx 直接子类）
+    try:
+        import openai
+        if isinstance(e, openai.APITimeoutError):
+            return True
+    except ImportError:
+        pass
+    return False
