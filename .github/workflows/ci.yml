@@ -1,0 +1,75 @@
+# ========== CI 流水线（P1: 冒烟验证） ==========
+# 触发: push / pull request 到 main（及 Agent 分支的 PR）
+# 内容:
+#   - 后端: 依赖安装（锁定版本）+ pytest 冒烟（纯逻辑测试，无 DB/LLM 依赖）
+#   - 前端: npm ci + tsc 类型检查 + vite 生产构建
+# 后续扩展（P1 阶段 2）: 覆盖率门槛、Docker 镜像构建推送、Alembic 迁移校验
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend (pytest smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.lock
+
+      # 锁定版本安装（requirements.lock 由 pip freeze 生成）
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-dev.txt
+          pip install -r requirements.lock
+
+      # 语法级冒烟: 全量编译检查（不等启动，DB/Redis 不参与）
+      - name: Compile check
+        run: |
+          python -m compileall -q app main.py
+
+      # 纯逻辑测试（SSRF 守卫 / JWT 校验等，无外部依赖）
+      - name: Run smoke tests
+        run: |
+          python -m pytest tests/ -v --tb=short
+
+  frontend:
+    name: Frontend (tsc + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: front/package-lock.json
+
+      - name: Install dependencies
+        working-directory: front
+        run: npm ci
+
+      - name: Lint (eslint)
+        working-directory: front
+        run: npm run lint
+
+      - name: Unit tests (vitest)
+        working-directory: front
+        run: npm test
+
+      - name: Type check (tsc --noEmit)
+        working-directory: front
+        run: npx tsc --noEmit
+
+      - name: Production build
+        working-directory: front
+        run: npm run build

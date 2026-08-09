@@ -20,6 +20,8 @@ langchain-mcp-adapters>=0.3.2
 sqlalchemy[asyncio]>=2.0.40
 aiomysql>=0.2.0
 redis[hiredis]>=5.2.0,<6.0.0
+# 数据库迁移（启动时 init_db 自动执行 alembic upgrade head）
+alembic>=1.14.0
 
 # ========== LLM Providers ==========
 dashscope>=1.20.0
@@ -65,9 +67,10 @@ pydantic-settings>=2.9.0
 # ========== Model Trace（P2-5 trace 服务化） ==========
 langfuse>=4.0.0
 
-# ========== Testing ==========
-pytest>=8.3.0
-pytest-asyncio>=0.25.0
-pytest-cov>=6.0.0
-pytest-mock>=3.14.0
+# ========== Metrics（审查 P1-2：/metrics Prometheus 指标） ==========
+prometheus-client>=0.21.0
+
+# ========== PPT 云端渲染（遗留：ppt_renderer_aspose.py 使用，主引擎已切 python-pptx） ==========
 asposeslidescloud>=26.6.0
+
+# 注意：测试依赖已移至 requirements-dev.txt（pytest 系列）

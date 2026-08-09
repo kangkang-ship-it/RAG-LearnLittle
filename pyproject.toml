@@ -1,0 +1,10 @@
+# 项目级工具配置（pytest 等）
+# 注意：pytest-asyncio 1.x 的 asyncio_mode 行为有破坏性变更（auto 会包住所有测试），
+# 此处显式固定 strict：仅带 @pytest.mark.asyncio 的测试在事件循环中运行，
+# 普通同步测试直接执行（内部可安全使用 asyncio.run）。
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q"
