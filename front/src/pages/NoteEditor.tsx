@@ -96,7 +96,8 @@ export default function NoteEditor() {
         setLoading(false);
       }
     })();
-  }, [id]);
+    // navigate 为 router 稳定引用
+  }, [id, navigate]);
 
   /** 保存笔记 */
   const handleSave = async () => {

@@ -1,60 +1,43 @@
 /**
  * AI 对话页面
- * 
+ *
  * 功能：
  * 1. SSE 流式对话（思考过程实时展示）
  * 2. Markdown 渲染 AI 回答
  * 3. 消息气泡列表 + 自动滚动
  * 4. 快捷问题按钮
+ * 5. 引用笔记 / PPT 模板选择、图片视频附件、Plan 进度卡片
+ *
+ * 审查 ⑤：巨型组件拆分 —— 渲染层组件已拆至 components/chat/：
+ *   MessageBubble / MessageContent / PptDownloadCard / TtsAudioCard /
+ *   NotePicker / TemplatePicker；本文件保留状态编排与 SSE 生命周期。
  */
 
 import { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Send, Square, Plus, User, FileText, X, Search, Brain, Paperclip, Download, Loader2, Presentation } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import rehypeHighlight from 'rehype-highlight';
-import rehypeKatex from 'rehype-katex';
-import { normalizeCategory } from '../constants/noteCategories';
+import { Send, Square, Plus, FileText, X, Brain, Paperclip, Presentation } from 'lucide-react';
 import { useSSE } from '../hooks/useSSE';
 import { useSessionStore } from '../stores/useSessionStore';
 import { useUserStore } from '../stores/useUserStore';
 import { sessionsApi } from '../api/sessions';
-import { notesApi } from '../api/notes';
 import { endpoints } from '../api/endpoints';
 import { uploadChatFile, deleteChatFile } from '../api/chat';
 import type { ChatMessage, Note, AttachmentMeta } from '../types/api';
-import { pptTemplatesApi, type PptTemplateInfo } from '../api/pptTemplates';
-import client from '../api/client';
-import PlanProgressCard from '../components/chat/PlanProgressCard';
+import type { PptTemplateInfo } from '../api/pptTemplates';
 import type { PlanStepData } from '../components/chat/PlanProgressCard';
+import type { PlanDisplayState } from '../components/chat/MessageBubble';
+import MessageBubble from '../components/chat/MessageBubble';
 import AttachmentBar from '../components/chat/AttachmentBar';
 import type { PendingAttachment } from '../components/chat/AttachmentBar';
-import AttachmentViewer from '../components/chat/AttachmentViewer';
+import NotePicker from '../components/chat/NotePicker';
+import TemplatePicker from '../components/chat/TemplatePicker';
 
 // 附件限制（与后端 .env 配置保持一致）
 const MAX_IMAGES_PER_MSG = 6;
 const MAX_VIDEOS_PER_MSG = 1;
 const MAX_IMAGE_MB = 10;
 const MAX_VIDEO_MB = 50;
-
-/** 工具名 → 中文展示名（简单路径补转发工具事件后的状态指示，§7） */
-const TOOL_NAME_MAP: Record<string, string> = {
-  generate_ppt_tool: '正在生成 PPT（约需 1~2 分钟，Aspose 云端渲染较慢）…',
-  search_notes_tool: '正在搜索笔记…',
-  get_note_content_tool: '正在读取笔记内容…',
-  get_note_stats_tool: '正在统计笔记…',
-  get_today_reviews_tool: '正在获取待回顾笔记…',
-  mark_reviewed_tool: '正在标记回顾…',
-  create_note_tool: '正在创建笔记…',
-  update_note_tool: '正在更新笔记…',
-  get_related_notes_tool: '正在查找关联笔记…',
-  get_user_info_tools: '正在读取用户信息…',
-  send_email: '正在发送邮件…',
-  what_time_is_now: '正在获取时间…',
-};
 
 export default function AIChat() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -74,17 +57,10 @@ export default function AIChat() {
   // 引用笔记状态
   const [selectedNotes, setSelectedNotes] = useState<Note[]>([]);
   const [showNotePicker, setShowNotePicker] = useState(false);
-  const [noteList, setNoteList] = useState<Note[]>([]);
-  const [noteSearch, setNoteSearch] = useState('');
-  const [loadingNotes, setLoadingNotes] = useState(false);
-  const notePickerRef = useRef<HTMLDivElement>(null);
 
   // PPT 模板选择状态（v1.4，设计方案 §6.5：与笔记一起选中，单选）
   const [selectedTemplate, setSelectedTemplate] = useState<PptTemplateInfo | null>(null);
   const [showTemplatePicker, setShowTemplatePicker] = useState(false);
-  const [templateList, setTemplateList] = useState<PptTemplateInfo[]>([]);
-  const [loadingTemplates, setLoadingTemplates] = useState(false);
-  const templatePickerRef = useRef<HTMLDivElement>(null);
 
   // 附件状态（上传预览条）
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
@@ -98,9 +74,6 @@ export default function AIChat() {
   const [planActive, setPlanActive] = useState(false);
   const [planComplete, setPlanComplete] = useState(false);
   const [currentTool, setCurrentTool] = useState('');
-  // PPT 生成完成信息（tool_file 事件，§7 下载卡片）
-  // PPT 下载卡片（v1.6：不再用独立 state——tool_file 随消息 attachments 持久化，
-  // 历史回放从消息附件恢复卡片，切换模块后不消失）
 
   // requestAnimationFrame 节流：合并高频 token 更新
   const rafRef = useRef<number | null>(null);
@@ -157,48 +130,13 @@ export default function AIChat() {
     })();
 
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+    // navigate/setLastSessionId/clearCurrentSession/setMessages 均为稳定引用（router/zustand）
+  }, [sessionId, navigate, setLastSessionId, clearCurrentSession, setMessages]);
 
   /** 自动滚动到底部 */
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
-
-  /** 点击外部关闭笔记/模板选择面板 */
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (notePickerRef.current && !notePickerRef.current.contains(e.target as Node)) {
-        setShowNotePicker(false);
-      }
-      if (templatePickerRef.current && !templatePickerRef.current.contains(e.target as Node)) {
-        setShowTemplatePicker(false);
-      }
-    };
-    if (showNotePicker || showTemplatePicker) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showNotePicker, showTemplatePicker]);
-
-  /** 打开笔记选择面板时加载笔记列表 */
-  const toggleNotePicker = async () => {
-    if (!showNotePicker) {
-      setShowNotePicker(true);
-      setNoteSearch('');
-      setLoadingNotes(true);
-      try {
-        const res = await notesApi.list({ page: 1, page_size: 100 });
-        setNoteList(res.data?.data?.notes ?? []);
-      } catch (err) {
-        console.error('[AIChat] 加载笔记列表失败:', err);
-      } finally {
-        setLoadingNotes(false);
-      }
-    } else {
-      setShowNotePicker(false);
-    }
-  };
 
   /** 切换笔记选中状态 */
   const toggleNote = (note: Note) => {
@@ -207,24 +145,6 @@ export default function AIChat() {
       if (exists) return prev.filter((n) => n.id !== note.id);
       return [...prev, note];
     });
-  };
-
-  /** 打开/关闭 PPT 模板选择面板（打开时懒加载模板列表） */
-  const toggleTemplatePicker = async () => {
-    if (!showTemplatePicker) {
-      setShowTemplatePicker(true);
-      setLoadingTemplates(true);
-      try {
-        const res = await pptTemplatesApi.list();
-        setTemplateList(res.data?.data?.templates ?? []);
-      } catch {
-        setTemplateList([]);
-      } finally {
-        setLoadingTemplates(false);
-      }
-    } else {
-      setShowTemplatePicker(false);
-    }
   };
 
   /** 切换模板选中状态（单选；再次点击取消） */
@@ -236,11 +156,6 @@ export default function AIChat() {
   const removeNote = (noteId: string) => {
     setSelectedNotes((prev) => prev.filter((n) => n.id !== noteId));
   };
-
-  /** 过滤后的笔记列表 */
-  const filteredNotes = noteList.filter((n) =>
-    n.title.toLowerCase().includes(noteSearch.toLowerCase())
-  );
 
   /** 选择文件（前端预校验：类型/大小/数量上限，然后逐个上传） */
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -428,6 +343,18 @@ export default function AIChat() {
       });
     };
 
+    /** 发送前刷新残留内容（done/error 与 finally 共用） */
+    const flushPending = () => {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      if (pendingContentRef.current) {
+        updateLastAssistantMessage(pendingContentRef.current);
+        pendingContentRef.current = '';
+      }
+    };
+
     try {
       await start(
         endpoints.chat.query,
@@ -447,15 +374,7 @@ export default function AIChat() {
             scheduleFlush();
           },
           onDone: (newSessionId) => {
-            // 确保最后一次更新被刷新
-            if (rafRef.current !== null) {
-              cancelAnimationFrame(rafRef.current);
-              rafRef.current = null;
-            }
-            if (pendingContentRef.current) {
-              updateLastAssistantMessage(pendingContentRef.current);
-              pendingContentRef.current = '';
-            }
+            flushPending();
             setIsStreaming(false);
             setCurrentTool('');
             // 新会话创建后记录并更新 URL
@@ -468,14 +387,7 @@ export default function AIChat() {
           },
           onError: (msg) => {
             // 确保错误前内容被刷新
-            if (rafRef.current !== null) {
-              cancelAnimationFrame(rafRef.current);
-              rafRef.current = null;
-            }
-            if (pendingContentRef.current) {
-              updateLastAssistantMessage(pendingContentRef.current);
-              pendingContentRef.current = '';
-            }
+            flushPending();
             updateLastAssistantMessage(`⚠️ ${msg}`);
             setIsStreaming(false);
             setCurrentTool('');
@@ -495,7 +407,7 @@ export default function AIChat() {
               return [...prev, { step, action, status: status as PlanStepData['status'] }];
             });
           },
-          onPlanStepStart: (step, _action) => {
+          onPlanStepStart: (step) => {
             setPlanSteps((prev) =>
               prev.map((s) => s.step === step ? { ...s, status: 'running' as const } : s)
             );
@@ -514,7 +426,7 @@ export default function AIChat() {
             setPlanCompletedSteps(completedSteps);
             setPlanComplete(true);
           },
-          onPlanFallback: (_reason) => {
+          onPlanFallback: () => {
             // Plan 失败降级为 ReAct，隐藏进度条
             setPlanActive(false);
             setCurrentTool('');
@@ -523,7 +435,7 @@ export default function AIChat() {
           onToolStart: (name) => {
             setCurrentTool(name);
           },
-          onToolEnd: (_name) => {
+          onToolEnd: () => {
             setCurrentTool('');
           },
           // 工具产出文件事件（PPT 生成完成 §6.3 第 3 段 / TTS 语音生成，外部 API 工具文档 §10 C3）
@@ -554,15 +466,7 @@ export default function AIChat() {
     } finally {
       // 无论正常结束、报错还是用户点击停止（AbortError），都确保重置流式状态
       setIsStreaming(false);
-      // 清理 rAF
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-      if (pendingContentRef.current) {
-        updateLastAssistantMessage(pendingContentRef.current);
-        pendingContentRef.current = '';
-      }
+      flushPending();
       // 清理附件预览条（附件已随消息发出，fileId 由后端管理）
       pendingAttachments.forEach((a) => {
         if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
@@ -573,161 +477,18 @@ export default function AIChat() {
 
   const quickQuestions = ['帮我解释量子计算', '写一首春天的诗', '推荐几本好书'];
 
-/**
- * AI 消息内容渲染：Markdown + LaTeX 数学公式（KaTeX）
- * - remarkMath 解析 $...$ 行内公式与 $$...$$ 块级公式
- * - rehypeKatex 将公式渲染为 KaTeX 排版
- * - 流式中间态（未闭合的公式/代码块）由 react-markdown 安全降级为纯文本
- */
-function MessageContent({ content }: { content: string }) {
-  return (
-    <div className="md-prose">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeHighlight, rehypeKatex]}
-      >
-        {content}
-      </ReactMarkdown>
-    </div>
-  );
-}
-
-/**
- * PPT 下载卡片（tool_file 事件，§7 下载实现）
- * 下载走 axios client（自动注入 JWT + 401 自动 refresh 重试，不能用 <a href>）
- */
-function PptDownloadCard({ file }: { file: { download_url?: string; title?: string; slide_count?: number } }) {
-  const [downloading, setDownloading] = useState(false);
-
-  const handleDownload = async () => {
-    if (downloading) return;
-    setDownloading(true);
-    try {
-      // 用 axios client 而非原生 fetch：
-      // ① 请求拦截器自动注入 JWT；② 401 自动 refresh 并重试（access token
-      // 30 分钟过期，原生 fetch 无此机制会导致过期后下载 401「缺少认证信息」）
-      const res = await client.get(file.download_url ?? '', { responseType: 'blob' });
-      const blob = res.data;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${file.title || '讲解PPT'}.pptx`;   // 文件名取自 tool_file 事件的 title
-      document.body.appendChild(a);
-      a.click();
-      URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    } catch (err) {
-      const status = (err as { response?: { status?: number } })?.response?.status;
-      if (status === 404) {
-        alert('文件已过期，请重新生成');
-      } else if (status === 401) {
-        alert('登录已过期，请重新登录');
-      } else {
-        alert(`下载失败(${status ?? '未知错误'})`);
-      }
-    } finally {
-      setDownloading(false);
-    }
+  // 传给 MessageBubble 的 Plan 展示状态
+  const planState: PlanDisplayState = {
+    active: planActive,
+    goal: planGoal,
+    steps: planSteps,
+    completedSteps: planCompletedSteps,
+    totalSteps: planTotalSteps,
+    isComplete: planComplete,
+    currentTool,
   };
 
-  return (
-    <div className="mt-2 flex items-center gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-accent-bg)] px-3 py-2">
-      <span className="text-lg" role="img" aria-label="PPT">📄</span>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-[var(--color-text)] truncate">
-          已生成讲解 PPT{file.slide_count ? `（${file.slide_count} 页）` : ''}
-        </p>
-        <p className="text-xs text-[var(--color-text-tertiary)] truncate">
-          {file.title || '讲解PPT'}
-        </p>
-      </div>
-      <button
-        onClick={handleDownload}
-        disabled={downloading}
-        className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-[var(--radius-md)] bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 disabled:opacity-50 transition-opacity"
-      >
-        <Download size={14} />
-        {downloading ? '下载中…' : '下载'}
-      </button>
-    </div>
-  );
-}
-
-/**
- * TTS 语音卡片（tool_file 事件，外部 API 工具文档 §10 C3）
- * 播放/下载均走 axios client（自动注入 JWT + 401 自动 refresh），
- * 不能用原生 <audio src>/<a href>（不携带 Authorization header）
- */
-function TtsAudioCard({ file }: { file: { download_url?: string; duration_estimate?: string } }) {
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [downloading, setDownloading] = useState(false);
-
-  const loadAudio = async () => {
-    if (audioUrl || loading) return;
-    setLoading(true);
-    try {
-      const res = await client.get(file.download_url ?? '', { responseType: 'blob' });
-      setAudioUrl(URL.createObjectURL(res.data));
-    } catch (err) {
-      const status = (err as { response?: { status?: number } })?.response?.status;
-      alert(status === 404 ? '音频已过期，请重新生成' : '音频加载失败，请重新生成');
-    } finally {
-      setLoading(false);
-    }
-  };
-  // 卡片挂载后自动加载音频（生成完成即可播放）
-  useEffect(() => {
-    void loadAudio();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const handleDownload = async () => {
-    if (downloading) return;
-    setDownloading(true);
-    try {
-      const res = await client.get(file.download_url ?? '', { responseType: 'blob' });
-      const blob = res.data;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = '语音朗读.mp3';
-      document.body.appendChild(a);
-      a.click();
-      URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    } catch (err) {
-      const status = (err as { response?: { status?: number } })?.response?.status;
-      alert(status === 404 ? '音频已过期，请重新生成' : `下载失败(${status ?? '未知错误'})`);
-    } finally {
-      setDownloading(false);
-    }
-  };
-
-  return (
-    <div className="mt-2 flex items-center gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-accent-bg)] px-3 py-2">
-      <span className="text-lg" role="img" aria-label="语音">🔊</span>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-[var(--color-text)] truncate">
-          已生成语音朗读{file.duration_estimate ? `（${file.duration_estimate}）` : ''}
-        </p>
-        {audioUrl ? (
-          <audio controls src={audioUrl} className="w-full h-8 mt-1" />
-        ) : (
-          <p className="text-xs text-[var(--color-text-tertiary)]">{loading ? '音频加载中…' : '音频加载失败'}</p>
-        )}
-      </div>
-      <button
-        onClick={handleDownload}
-        disabled={downloading}
-        className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-[var(--radius-md)] bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 disabled:opacity-50 transition-opacity"
-      >
-        <Download size={14} />
-        {downloading ? '下载中…' : '下载'}
-      </button>
-    </div>
-  );
-}
+  const selectedNoteIds = new Set(selectedNotes.map((n) => n.id));
 
   return (
     <div className="flex flex-col h-[calc(100vh-48px)]">
@@ -772,88 +533,15 @@ function TtsAudioCard({ file }: { file: { download_url?: string; duration_estima
           </div>
         ) : null}
 
-        {messages.map((msg) => (
-          <div key={msg.id} className={`flex items-start gap-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            {msg.role === 'assistant' && (
-              <div className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-[var(--color-accent-bg)]">
-                <span role="img" aria-label="AI 助手" className="text-[18px] leading-none">🤖</span>
-              </div>
-            )}
-            <div className={`max-w-[80%] p-3 rounded-[var(--radius-md)] ${
-              msg.role === 'user'
-                ? 'bg-[var(--color-accent)] text-white'
-                : 'bg-[var(--color-card)] border border-[var(--color-border)] text-[var(--color-text)]'
-            }`}>
-              {/* Plan 进度卡片（仅在最后一条 AI 消息上显示） */}
-              {msg.role === 'assistant' && planActive && msg === messages[messages.length - 1] && (
-                <PlanProgressCard
-                  goal={planGoal}
-                  steps={planSteps}
-                  completedSteps={planCompletedSteps}
-                  totalSteps={planTotalSteps}
-                  isComplete={planComplete}
-                  currentTool={currentTool}
-                />
-              )}
-              {/* AI 思考加载态：内容为空时显示"正在思考" + 3 个跳动圆点（demo 规格一致） */}
-              {msg.role === 'assistant' && !msg.content && (
-                <div className="thinking-loading" role="status" aria-live="polite">
-                  <span>正在思考</span>
-                  <span className="thinking-dots" aria-hidden="true">
-                    <span className="thinking-dot" />
-                    <span className="thinking-dot" />
-                    <span className="thinking-dot" />
-                  </span>
-                </div>
-              )}
-              {msg.role === 'assistant' ? (
-                // v1.6：生成完成且含 PPT 卡片时，冗长过程文本折叠为「查看生成过程」
-                // （生成中仍实时显示；避免「校验报告+设计稿+结果」平铺刷屏）
-                msg.attachments?.some((a) => a.file_type === 'ppt') && !isStreaming ? (
-                  <details className="group">
-                    <summary className="cursor-pointer select-none text-xs text-[var(--color-text-tertiary)] hover:text-[var(--color-accent)]">
-                      查看生成过程
-                    </summary>
-                    <div className="mt-2">
-                      <MessageContent content={msg.content || '...'} />
-                    </div>
-                  </details>
-                ) : (
-                  <MessageContent content={msg.content || '...'} />
-                )
-              ) : (
-                <div className="text-sm whitespace-pre-wrap">{msg.content || '...'}</div>
-              )}
-              {/* 工具调用状态指示（简单路径补转发工具事件后生效，§6.3/§7；中文名映射） */}
-              {msg.role === 'assistant' && msg === messages[messages.length - 1] && currentTool && (
-                <div className="mt-2 flex items-center gap-1.5 text-xs text-[var(--color-text-tertiary)]">
-                  <Loader2 size={12} className="animate-spin" />
-                  <span>{TOOL_NAME_MAP[currentTool] ?? currentTool}</span>
-                </div>
-              )}
-              {/* PPT 生成完成下载卡片（v1.6：从消息 attachments 渲染——流式挂载与历史回放同源，切换模块不消失） */}
-              {msg.attachments?.find((a) => a.file_type === 'ppt') && (
-                <PptDownloadCard file={msg.attachments.find((a) => a.file_type === 'ppt')!} />
-              )}
-              {/* TTS 语音播放/下载卡片（v1.7：外部 API 工具文档 §10 C3，同 attachments 渲染源） */}
-              {msg.attachments?.find((a) => a.file_type === 'tts') && (
-                <TtsAudioCard file={msg.attachments.find((a) => a.file_type === 'tts')!} />
-              )}
-              {/* 用户消息附件渲染（图片缩略图 / 视频播放器，历史回显同样走这里） */}
-              {msg.role === 'user' && msg.attachments && msg.attachments.length > 0 && (
-                <AttachmentViewer attachments={msg.attachments} />
-              )}
-            </div>
-            {msg.role === 'user' && (
-              <div className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-[var(--color-accent)] overflow-hidden">
-                {userAvatar ? (
-                  <img src={userAvatar} alt="avatar" className="w-8 h-8 rounded-full object-cover" />
-                ) : (
-                  <User size={18} className="text-white" />
-                )}
-              </div>
-            )}
-          </div>
+        {messages.map((msg, idx) => (
+          <MessageBubble
+            key={msg.id}
+            msg={msg}
+            isLast={idx === messages.length - 1}
+            isStreaming={isStreaming}
+            userAvatar={userAvatar}
+            plan={planState}
+          />
         ))}
         <div ref={messagesEndRef} />
       </div>
@@ -899,7 +587,7 @@ function TtsAudioCard({ file }: { file: { download_url?: string; duration_estima
 
         {/* 引用笔记按钮 */}
         <button
-          onClick={toggleNotePicker}
+          onClick={() => setShowNotePicker((v) => !v)}
           className={`flex-shrink-0 px-3 py-2.5 rounded-[var(--radius-md)] border transition-colors ${
             showNotePicker || selectedNotes.length > 0
               ? 'border-[var(--color-accent)] text-[var(--color-accent)] bg-[var(--color-accent-bg)]'
@@ -912,7 +600,7 @@ function TtsAudioCard({ file }: { file: { download_url?: string; duration_estima
 
         {/* PPT 模板按钮（v1.4：与笔记一起选中，生成 PPT 时使用） */}
         <button
-          onClick={toggleTemplatePicker}
+          onClick={() => setShowTemplatePicker((v) => !v)}
           className={`flex-shrink-0 px-3 py-2.5 rounded-[var(--radius-md)] border transition-colors ${
             showTemplatePicker || selectedTemplate
               ? 'border-[var(--color-accent)] text-[var(--color-accent)] bg-[var(--color-accent-bg)]'
@@ -924,100 +612,20 @@ function TtsAudioCard({ file }: { file: { download_url?: string; duration_estima
         </button>
 
         {/* PPT 模板选择面板（单选；懒加载模板列表） */}
-        {showTemplatePicker && (
-          <div
-            ref={templatePickerRef}
-            className="absolute bottom-full mb-2 left-0 w-72 max-h-64 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-card)] shadow-lg z-10 flex flex-col"
-          >
-            <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)]">
-              <Presentation size={14} className="text-[var(--color-text-tertiary)]" />
-              <span className="flex-1 text-sm text-[var(--color-text)]">选择 PPT 模板</span>
-              <button
-                onClick={() => setShowTemplatePicker(false)}
-                className="text-[var(--color-text-tertiary)] hover:text-[var(--color-text)]"
-              >
-                <X size={14} />
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto">
-              {loadingTemplates ? (
-                <div className="text-center py-6 text-sm text-[var(--color-text-tertiary)]">加载中...</div>
-              ) : templateList.length === 0 ? (
-                <div className="text-center py-6 text-sm text-[var(--color-text-tertiary)]">
-                  暂无模板，请先在「PPT 模板」页上传
-                </div>
-              ) : (
-                templateList.map((tmpl) => {
-                  const isSelected = selectedTemplate?.id === tmpl.id;
-                  return (
-                    <button
-                      key={tmpl.id}
-                      onClick={() => toggleTemplate(tmpl)}
-                      className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
-                        isSelected
-                          ? 'bg-[var(--color-accent-bg)] text-[var(--color-accent)]'
-                          : 'text-[var(--color-text)] hover:bg-[var(--color-accent-bg)]'
-                      }`}
-                    >
-                      <Presentation size={14} className="flex-shrink-0" />
-                      <span className="truncate">{tmpl.name}</span>
-                      {isSelected && <span className="ml-auto text-xs flex-shrink-0">✓</span>}
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        )}
+        <TemplatePicker
+          open={showTemplatePicker}
+          onClose={() => setShowTemplatePicker(false)}
+          selected={selectedTemplate}
+          onSelect={toggleTemplate}
+        />
 
         {/* 笔记选择面板 */}
-        {showNotePicker && (
-          <div
-            ref={notePickerRef}
-            className="absolute bottom-full mb-2 left-0 w-72 max-h-64 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-card)] shadow-lg z-10 flex flex-col"
-          >
-            {/* 搜索栏 */}
-            <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)]">
-              <Search size={14} className="text-[var(--color-text-tertiary)]" />
-              <input
-                type="text"
-                value={noteSearch}
-                onChange={(e) => setNoteSearch(e.target.value)}
-                placeholder="搜索笔记..."
-                className="flex-1 text-sm bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-tertiary)] focus:outline-none"
-              />
-            </div>
-            {/* 笔记列表 */}
-            <div className="flex-1 overflow-y-auto">
-              {loadingNotes ? (
-                <div className="text-center py-6 text-sm text-[var(--color-text-tertiary)]">加载中...</div>
-              ) : filteredNotes.length === 0 ? (
-                <div className="text-center py-6 text-sm text-[var(--color-text-tertiary)]">暂无笔记</div>
-              ) : (
-                filteredNotes.map((note) => {
-                  const isSelected = selectedNotes.some((n) => n.id === note.id);
-                  return (
-                    <button
-                      key={note.id}
-                      onClick={() => toggleNote(note)}
-                      className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
-                        isSelected
-                          ? 'bg-[var(--color-accent-bg)] text-[var(--color-accent)]'
-                          : 'text-[var(--color-text)] hover:bg-[var(--color-accent-bg)]'
-                      }`}
-                    >
-                      <FileText size={14} className="flex-shrink-0" />
-                      <span className="truncate">{note.title}</span>
-                      {normalizeCategory(note.category) && (
-                        <span className="ml-auto text-xs text-[var(--color-text-tertiary)] flex-shrink-0">{normalizeCategory(note.category)}</span>
-                      )}
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        )}
+        <NotePicker
+          open={showNotePicker}
+          onClose={() => setShowNotePicker(false)}
+          selectedIds={selectedNoteIds}
+          onToggle={toggleNote}
+        />
 
         <input
           type="text"

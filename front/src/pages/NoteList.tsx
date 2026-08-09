@@ -70,6 +70,9 @@ export default function NoteList() {
   // 初始加载 + 分类/搜索变化时重新加载（始终重置到第 1 页）
   useEffect(() => {
     loadNotes(true);
+    // loadNotes 闭包捕获 notes/page，加入依赖会引发重复加载循环；
+    // 根因是审查 M1 的列表请求竞态（旧响应覆盖新响应），修复见生产就绪度审查报告 §5-M1
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category, debouncedSearch]);
 
   // 筛选选项卡：全部 + 标准分类 + 兜底"其他"（不在标准分类中的笔记归入"其他"）

@@ -15,6 +15,9 @@
     "moduleDetection": "force",
     "noEmit": true,
 
+    /* Strict（审查 P2-2：开启前需清理全部隐式 any / 空值解引用） */
+    "strict": true,
+
     /* Linting */
     "noUnusedLocals": true,
     "noUnusedParameters": true,

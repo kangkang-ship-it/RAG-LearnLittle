@@ -1,9 +1,15 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
+  // Vitest 测试配置（审查 P1-2 前端测试网；纯逻辑测试，node 环境即可）
+  test: {
+    include: ['src/**/*.test.{ts,tsx}'],
+    environment: 'node',
+  },
   server: {
     port: 3000,
     // 将 API 请求代理到后端 FastAPI 服务

@@ -1,14 +1,18 @@
 /**
  * SSE 流式通信 Hook
- * 
+ *
  * 核心功能：
  * 1. 使用原生 fetch + ReadableStream 逐行解析 SSE 事件
  * 2. 支持聊天 SSE（thinking/response/done/error）和知识库 SSE（processing/completed/finish）
  * 3. AbortController 支持取消
+ *
+ * 解析逻辑已抽到 utils/sseParser.ts（SSEParser + dispatchSSEEvents），
+ * 本 Hook 只负责 fetch 生命周期与回调接线。
  */
 
 import { useRef, useCallback } from 'react';
-import type { ChatSSEMessage, KnowledgeSSEMessage, ToolFileInfo } from '../types/api';
+import type { KnowledgeSSEMessage, ToolFileInfo } from '../types/api';
+import { dispatchSSEEvents, SSEParser, type SSEDispatchCallbacks } from '../utils/sseParser';
 
 /** SSE 回调配置 */
 interface SSECallbacks {
@@ -42,7 +46,7 @@ export function useSSE() {
 
   /**
    * 启动 SSE 连接
-   * 
+   *
    * @param url - 请求 URL
    * @param body - 请求体（POST）
    * @param callbacks - 事件回调
@@ -82,105 +86,19 @@ export function useSSE() {
       }
 
       const decoder = new TextDecoder();
-      let buffer = '';
+      const parser = new SSEParser();
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-
-        // 按行解析 SSE 事件
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || ''; // 最后一行可能不完整，保留
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-
-          try {
-            const data = JSON.parse(line.slice(6)) as ChatSSEMessage & KnowledgeSSEMessage;
-
-            // 知识库 SSE 事件（通过 event_type 字段区分）
-            if ('event_type' in data && data.event_type) {
-              if (data.event_type === 'processing' || data.event_type === 'completed') {
-                callbacks.onKnowledgeProgress?.(data);
-              } else if (data.event_type === 'finish') {
-                callbacks.onKnowledgeProgress?.(data);
-              } else if (data.event_type === 'error') {
-                callbacks.onError?.(data.message || '上传失败');
-              }
-              continue;
-            }
-
-            // 聊天 SSE 事件
-            switch (data.type) {
-              case 'thinking':
-                callbacks.onThinking?.(data.stage || '', data.content || '', data.details);
-                break;
-
-              case 'response':
-                if (data.content) {
-                  callbacks.onResponse?.(data.content, data.session_id);
-                }
-                break;
-
-              case 'done':
-                callbacks.onDone?.(data.session_id);
-                break;
-
-              case 'error':
-                callbacks.onError?.(data.content || '未知错误');
-                break;
-
-              // Plan-and-Execute 事件
-              case 'plan_start':
-                callbacks.onPlanStart?.(data.goal || '', data.total_steps || 0);
-                break;
-
-              case 'plan_step':
-                callbacks.onPlanStep?.(data.step || 0, data.action || '', data.status || 'pending');
-                break;
-
-              case 'plan_step_start':
-                callbacks.onPlanStepStart?.(data.step || 0, data.action || '');
-                break;
-
-              case 'plan_step_end':
-                callbacks.onPlanStepEnd?.(data.step || 0, data.result || '');
-                break;
-
-              case 'plan_synthesize':
-                callbacks.onPlanSynthesize?.();
-                break;
-
-              case 'plan_complete':
-                callbacks.onPlanComplete?.(data.total_steps || 0, data.completed_steps || 0);
-                break;
-
-              case 'plan_fallback':
-                callbacks.onPlanFallback?.(data.reason || '');
-                break;
-
-              // 工具调用事件
-              case 'tool_start':
-                callbacks.onToolStart?.(data.name || '');
-                break;
-
-              case 'tool_end':
-                callbacks.onToolEnd?.(data.name || '', data.duration_ms);
-                break;
-
-              case 'tool_file':
-                callbacks.onToolFile?.(data as unknown as ToolFileInfo);
-                break;
-            }
-          } catch {
-            // JSON 解析失败，跳过该行
-          }
-        }
+        parser.feed(decoder.decode(value, { stream: true }));
+        dispatchEvents(parser.takeEvents(), callbacks);
       }
 
-      // 流结束
+      // 流结束：处理残留的最后一行
+      parser.flush();
+      dispatchEvents(parser.takeEvents(), callbacks);
 
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') {
@@ -200,4 +118,15 @@ export function useSSE() {
   }, []);
 
   return { start, stop };
+}
+
+/**
+ * 分发 SSE 事件到业务回调（模块级包装，收敛类型断言）
+ *
+ * 运行时 dispatchSSEEvents 已按 event_type/type 字段分流：知识库回调只会收到
+ * 带 event_type 的载荷（运行时即 KnowledgeSSEMessage），此处按实际载荷断言
+ * （审查 P1-2：SSE 事件细化为 discriminated union 属后续优化项）
+ */
+function dispatchEvents(events: Parameters<typeof dispatchSSEEvents>[0], callbacks: unknown): void {
+  dispatchSSEEvents(events, callbacks as SSEDispatchCallbacks);
 }

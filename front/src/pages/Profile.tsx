@@ -57,7 +57,8 @@ export default function Profile() {
         setLoading(false);
       }
     })();
-  }, []);
+    // updateUserInfo 为 zustand 稳定 action，加入依赖不会重复触发
+  }, [updateUserInfo]);
 
   /** 头像文件选择 → 预览 + 上传 */
   const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
