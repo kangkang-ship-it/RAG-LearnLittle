@@ -16,9 +16,15 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 load_dotenv()   #加载环境变量
 
-# 强制 HuggingFace 离线模式（阻止在线下载模型，仅使用本地缓存）
-os.environ["HF_HUB_OFFLINE"] = "1"
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
+# 消除 passlib + bcrypt 4.x 兼容告警（passlib 1.7.4 检测 bcrypt.__about__ 失败，
+# 但 fallback 正常工作，密码哈希不受影响，仅抑制无意义的 traceback 噪音）
+import warnings
+warnings.filterwarnings("ignore", message=".*error reading bcrypt version.*")
+
+# HuggingFace 离线模式策略：默认在线（允许首次下载重排序模型），
+# 生产环境建议在 .env 中设为 1 并通过 HF_ENDPOINT 镜像加速
+os.environ.setdefault("HF_HUB_OFFLINE", "0")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "0")
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -67,6 +73,11 @@ class BackgroundInitManager:
         try:
             from app.services.email_service import EmailService
             self.email_service = EmailService()
+            if not self.email_service.available:
+                logger.warning(
+                    "⚠ SMTP 邮件服务未配置（在 .env 中设置 SMTP_USERNAME / SMTP_PASSWORD 后可启用）。"
+                    "注册验证码发送、笔记邮件导出等功能将不可用。"
+                )
         except Exception as e:
             logger.warning(f"EmailService 初始化失败（邮件功能不可用）: {e}")
             self.email_service = None
@@ -189,7 +200,7 @@ class BackgroundInitManager:
             loop = asyncio.get_event_loop()
             self.reorder_service = await asyncio.wait_for(
                 loop.run_in_executor(None, lambda: CrossEncoder(model_name)),
-                timeout=30
+                timeout=600  # 首次下载模型约 1GB，需要较长时间
             )
             logger.info(f"重排序模型初始化成功: {model_name}")
         except asyncio.TimeoutError:
@@ -491,9 +502,25 @@ def _clean_env(key: str, default: str, valid_values: list = None) -> str:
 
 if __name__ == "__main__":
     import logging
+    import socket
     import uvicorn
     from logging.handlers import TimedRotatingFileHandler
     from pathlib import Path
+
+    # 端口冲突检测（避免静默失败——端口被占用时给出友好报错）
+    _port = int(_clean_env("PORT", "8001"))
+    _sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        _sock.bind(("0.0.0.0", _port))
+        _sock.close()
+    except OSError:
+        print(f"\n{'='*60}")
+        print(f"  ❌ 端口 {_port} 已被占用，无法启动服务")
+        print(f"  请先关闭占用该端口的进程，或设置 PORT 环境变量换一个端口")
+        print(f"  查看占用进程: netstat -ano | findstr :{_port}")
+        print(f"{'='*60}\n")
+        import sys
+        sys.exit(1)
 
     # 热重载（审查 P1-2：生产默认关闭；开发时显式设置 UVICORN_RELOAD=true 开启）
     # 说明：reload=True 会 fork 子进程，导致 VSCode 断点无法命中，
@@ -566,7 +593,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=int(_clean_env("PORT", "8000")),
+        port=int(_clean_env("PORT", "8001")),
         reload=reload,
         log_level=log_level,
         log_config=_uvicorn_log_config,

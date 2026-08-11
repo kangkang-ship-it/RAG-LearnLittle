@@ -356,8 +356,11 @@ async def chat_query(
                 image_tokens_per_msg=tb_config.get("image_tokens_per_msg", 3000),
                 max_history_images=tb_config.get("max_history_images", 4),
             )
-            # 用 RAG 最大配额估算（实际 RAG 结果未就绪时用上限值）
-            history_quota = budget.allocate("" * tb_config.get("rag_context_max", 2000))
+            # 用 RAG 最大配额估算（修复 P3：填充占位文本使 TokenCounter 正确计数，
+            # 而非 ""*2000=="" 导致计数为 0，从而可能超出模型上下文窗口）
+            _rag_max = tb_config.get("rag_context_max", 2000)
+            _rag_placeholder = "placeholder " * (_rag_max // 12)  # 约 1 token/word
+            history_quota = budget.allocate(_rag_placeholder[: _rag_max])
             # 当前消息附件 token 从历史配额中扣减（优先保证当前消息）
             history_quota = max(500, history_quota - _estimate_attachment_tokens(attachments))
 
@@ -826,7 +829,7 @@ async def get_chat_file(
         raise _BE(code=_EC.TOKEN_INVALID, message="缺少认证信息", http_status=401)
 
     payload = decode_token(token_str)
-    if payload.get("type") != "access":
+    if payload.get("type") not in ("access", "attachment"):
         raise _BE(code=_EC.TOKEN_INVALID, message="Token 类型错误", http_status=401)
     user_id = payload.get("sub", "")
     if not user_id:

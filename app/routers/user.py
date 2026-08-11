@@ -363,6 +363,21 @@ async def refresh_token(data: RefreshTokenRequest, request: Request, db: AsyncSe
     ).model_dump())
 
 
+@router.post("/auth/attachment-token", summary="获取附件预览短期 Token")
+async def get_attachment_token(
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    用有效 Access Token 换取 60 秒附件预览 Token（修复 S3）
+
+    <img>/<video> 标签无法携带 Authorization Header，
+    使用短时效 Token 替代 30 分钟 access token 拼到 ?token= URL 参数中。
+    """
+    from app.utils.auth_utils import create_attachment_token
+    token = create_attachment_token(user_id)
+    return success_response(data={"token": token, "expires_in": 60})
+
+
 @router.post("/auth/sse-token", summary="获取 SSE 短期 Token")
 async def get_sse_token(user_id: str = Depends(get_current_user_id)):
     """

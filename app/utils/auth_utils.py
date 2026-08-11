@@ -144,6 +144,29 @@ def create_access_token(user_id: str, extra_claims: Optional[dict] = None) -> st
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
+def create_attachment_token(user_id: str) -> str:
+    """
+    创建附件预览专用 Token（短生命周期 60s，修复 S3）
+
+    用于 <img>/<video> 标签的 ?token= 参数，避免 30 分钟的 access token
+    泄漏到服务器访问日志和浏览器历史中。
+
+    Args:
+        user_id: 用户 UUID
+
+    Returns:
+        编码后的 JWT 字符串（type=attachment, TTL=60s）
+    """
+    expire = datetime.now(timezone.utc) + timedelta(seconds=60)
+    payload = {
+        "sub": user_id,
+        "exp": expire,
+        "jti": str(uuid.uuid4()),
+        "type": "attachment",
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
 def create_refresh_token(user_id: str) -> tuple[str, str]:
     """
     创建 Refresh Token（长生命周期）
@@ -380,24 +403,27 @@ async def is_token_blacklisted(jti: str) -> bool:
 
 async def get_current_user_id(
     authorization: Optional[str] = Header(None),
+    request: Request = None,
     db: AsyncSession = Depends(get_db)
 ) -> str:
     """
     FastAPI 依赖注入：从 Authorization Header 中提取当前用户 ID
-    
+
     流程：
     1. 解析 Bearer Token
     2. 解码 JWT
     3. 检查是否在黑名单中
-    4. 返回 user_id
-    
+    4. 将 user_id 写入 request.state 供限流中间件使用
+    5. 返回 user_id
+
     Args:
         authorization: Authorization 请求头
+        request: FastAPI Request 对象（用于写入 state.user_id）
         db: 数据库会话
-        
+
     Returns:
         当前用户的 UUID
-        
+
     Raises:
         BusinessError: 认证失败
     """
@@ -445,7 +471,11 @@ async def get_current_user_id(
             code=ErrorCode.TOKEN_INVALID,
             http_status=401
         )
-    
+
+    # 写入 request.state 供限流中间件按用户 ID 计数（修复 S2）
+    if request is not None:
+        request.state.user_id = user_id
+
     return user_id
 
 

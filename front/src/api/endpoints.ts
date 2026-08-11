@@ -17,6 +17,8 @@ export const endpoints = {
     logout: `${API_PREFIX}/auth/logout`,
     refresh: `${API_PREFIX}/auth/refresh`,
     sseToken: `${API_PREFIX}/auth/sse-token`,
+    /** POST 获取附件预览短时效 token（修复 S3：JWT URL 泄漏） */
+    attachmentToken: `${API_PREFIX}/auth/attachment-token`,
     /** POST 发送邮箱验证码（注册 / 修改邮箱复用） */
     sendCode: `${API_PREFIX}/auth/send-code`,
     /** GET 获取活跃设备会话列表 */

@@ -13,394 +13,467 @@
 ![ChromaDB](https://img.shields.io/badge/ChromaDB-1.0%2B-FC60A8)
 ![Redis](https://img.shields.io/badge/redis--py-5%2B-DC382D?logo=redis&logoColor=white)
 ![MySQL](https://img.shields.io/badge/MySQL-8%2B-4479A1?logo=mysql&logoColor=white)
-![MCP](https://img.shields.io/badge/MCP-LangChain--Adapters-009688)
 
 </div>
 
 ---
 
-## 📖 项目简介
+## 1. 项目解决什么问题
 
-**云尚** 是一款基于 **RAG（检索增强生成）** 的 AI 智能笔记助手。它以你的笔记为知识库，支持 **ReAct / Plan-and-Execute 双 Agent 编排模式**（共享同一套工具集）、**深度思考**、**图片 / 视频多模态理解**，并提供笔记模板、回收站、邮件发送、Token 用量追踪等完整工具链 —— 从记录知识到提取知识，一站式完成。
+云尚解决的是**个人知识管理碎片化**的痛点：笔记记了就忘、知识散落在不同平台、查找依靠关键词匹配而非语义理解。
 
-> 🎯 定位：本地优先的私人知识助手。支持 DashScope（阿里云百炼）与 Ollama（完全本地）双模型提供商一键切换。
+传统笔记工具只能"存"，云尚能"理解"——
 
----
+| 痛点 | 云尚的解决方案 |
+|:---|:---|
+| 笔记记完就忘 | 艾宾浩斯回顾系统，自动推送待复习笔记 |
+| 知识散落各处 | 知识库 + 笔记双源 RAG 检索，一次搜索覆盖全部知识 |
+| 搜索只能查关键词 | 向量语义搜索 + BM25 混合召回 + CrossEncoder 重排序 |
+| 笔记内容不关联 | AI 自动推荐关联笔记，发现知识之间的联系 |
+| 长文档难以消化 | 上传 PDF/Markdown/TXT 后 AI 帮你总结和问答 |
 
-## 🖼️ 界面预览
-
-<!-- ================================================================
-     截图区（预留空间，请手动补充）
-     👉 将运行截图放入 docs/screenshots/ 目录，然后复制下面的 <img>
-        标签替换对应的占位单元格即可。
-     示例：
-     <img src="docs/screenshots/chat.png" alt="AI 对话" width="48%"/>
-     <img src="docs/screenshots/notes.png" alt="笔记管理" width="48%"/>
-     <img src="docs/screenshots/login.png" alt="登录注册" width="48%"/>
-     <img src="docs/screenshots/plan.png" alt="Plan-and-Execute" width="48%"/>
-================================================================= -->
-
-<div align="center">
-<table>
-  <tr>
-    <td width="50%" align="center"><b>🗨️ AI 对话</b><br/><img src="docs/SDSK.png" alt="AI 对话" width="100%"/></td>
-    <td width="50%" align="center"><b>🧠 深度思考 / 多模态</b><br/><img src="docs/DMT.png" alt="深度思考 / 多模态" width="100%"/></td>
-  </tr>
-  <tr>
-    <td width="50%" align="center"><b>📓 笔记管理</b><br/><img src="docs/NoteImage.png" alt="笔记管理" width="100%"/></td>
-    <td width="50%" align="center"><b>🗺️ Plan-and-Execute</b><br/><img src="docs/Plan-And-Excute.png" alt="Plan-and-Execute" width="100%"/></td>
-  </tr>
-</table>
-</div>
+> 🎯 定位：本地优先的私人知识助手，你的"第二大脑"。
 
 ---
 
-## ⭐ 核心功能
+## 2. 主要功能
 
-| 模块 | 能力 |
-| :--- | :--- |
-| 🤖 **双 Agent 架构** | **ReAct**（逐步推理 + 工具调用）与 **Plan-and-Execute**（L1 规则 + L2 LLM 分类器混合路由） |
-| 🧠 **深度思考** | 前端开关控制主模型思考模式（质量与延迟可权衡）；附件场景自动关闭（视觉模型理解附件）；Plan / 分类器由环境变量独立控制 |
-| 🖼️ **多模态理解** | 图片 / 视频附件上传（视频抽帧），视觉模型解答 |
-| 📚 **RAG 知识库** | ChromaDB 向量检索 + BM25 混合召回 + bge-reranker 重排序 + LLM 摘要 |
-| 🛠️ **Agent 工具层** | 9 组 **15 个内置工具** + **MCP 动态工具**（数量随配置变化，当前 Tavily 白名单 2 个 + Fetch 全量）：关键词路由按需加载 + 全量兜底；工具调用审计落库、邮件安全校验与限流 |
-| 🌐 **MCP 联网能力** | Tavily 联网搜索 / URL 内容提取 + Fetch 通用网页抓取（转 Markdown），白名单注册进 "mcp" 组，Server 故障自动降级跳过 |
-| 🗣️ **语音合成** | Edge TTS 朗读（MP3，按用户目录隔离），对话中直接"朗读 / 读给我听"触发 |
-| 📊 **PPT 生成** | 关键词触发的讲解 PPT 生成（python-pptx 本地渲染，无额外额度）+ PPT 模板管理 +可切换Aspose.Slides Cloud API|
-| 🌍 **外部 API 工具** | DeepL 高质量翻译 · Wolfram Alpha 精确计算 / 解方程 / 单位换算 |
-| 📓 **笔记系统** | 富文本编辑（TipTap）、模板、AI 自动补全 / 打标签 |
-| 🗑️ **回收站** | 笔记删除进入回收站，14 天自动彻底清除（定时任务） |
-| ✉️ **邮件功能** | QQ 邮箱注册验证，笔记以 Markdown / PDF 导出发送 |
-| 🗜️ **记忆压缩** | 滑动窗口 + 里程碑摘要 + Redis 热缓存的三级对话记忆管理，长对话不丢上下文 |
-| 💰 **Token 用量追踪** | model_trace 输出总线（log / db / langfuse），成本账单 API（前端用量面板开发中） |
-| 🌐 **前端体验** | React 19 + Vite + Tailwind，i18n 国际化，暗 / 亮主题 |
-| ✅ **黄金评测器** | tests/eval 自动化评测 AI 对话质量（含安全用例） |
+### 🤖 AI 对话
+
+| 功能 | 说明 |
+|:---|:---|
+| 基础问答 | 自然语言对话，支持知识问答、代码生成、数学计算 |
+| 深度思考 | 🧠 开关控制，开启后模型先内部推理再输出答案（qwen3 thinking 模式） |
+| 多模态理解 | 📎 上传图片/视频附件，视觉模型（qwen-vl-max）理解内容 |
+| 流式输出 | SSE 实时逐 token 输出，思考过程可见 |
+
+### 🛠️ Agent 工具层
+
+AI 可以主动调用工具完成复杂任务（15 个内置工具）：
+
+| 工具组 | 能力 |
+|:---|:---|
+| 笔记读写 | 创建笔记、更新笔记、搜索笔记、获取内容、统计、关联推荐 |
+| 回顾管理 | 获取今日待回顾列表、标记已完成回顾 |
+| PPT 生成 | 关键词触发的讲解 PPT 自动生成（python-pptx 本地渲染） |
+| 邮件发送 | 笔记以 Markdown/PDF 导出到邮箱 |
+| 翻译 | DeepL 高质量翻译（需配置 API Key） |
+| 计算 | Wolfram Alpha 精确计算、解方程、单位换算 |
+| 语音合成 | Edge TTS 文本朗读（对话中说"读给我听"触发） |
+| MCP 联网 | Tavily 联网搜索 + URL 内容提取 |
+
+### 📚 RAG 知识库
+
+| 功能 | 实现 |
+|:---|:---|
+| 文档上传 | 支持 PDF、Markdown、TXT，SSE 实时进度推送 |
+| 向量检索 | ChromaDB 持久化，cosine 相似度 |
+| 混合召回 | 向量检索 + BM25 关键词匹配 |
+| 重排序 | BAAI/bge-reranker-v2-m3 CrossEncoder 精排 |
+| 双源检索 | 知识库文档 + 笔记内容同时检索 |
+| HyDE | LLM 生成假设性回答提升检索准确率 |
+
+### 📓 笔记系统
+
+| 功能 | 说明 |
+|:---|:---|
+| 富文本编辑 | TipTap 编辑器，支持 Markdown 格式 |
+| 语义搜索 | 基于向量相似度的语义搜索 |
+| AI 辅助 | 自动补全、打标签（开发中） |
+| 回收站 | 删除笔记进入回收站，14 天自动清除 |
+| 模板 | 笔记模板创建与管理 |
+
+### 🔧 其他功能
+
+| 功能 | 说明 |
+|:---|:---|
+| 会话管理 | 多会话、自动标题生成、历史消息游标分页 |
+| Token 用量追踪 | 模型调用统计、费用计算、Langfuse 可观测 |
+| 定时任务 | 回收站清理、孤儿附件清理、TTS 文件清理 |
+| 国际化 | 中/英文界面切换，暗色/亮色主题 |
+| 账户安全 | JWT 双 Token 认证、设备管理、频率限制 |
 
 ---
 
-## 🏗️ 系统架构
-
-<!-- ================================================================
-     架构图预留区（请手动补充）
-     👉 将架构图放入 docs/ 目录后，复制下面的 <img> 标签替换占位块即可：
-     <img src="docs/系统架构图.png" alt="系统架构图" width="85%"/>
-================================================================= -->
-
-<div align="center">
-  <b><img src="docs/System_Architecture_Diagram.png" alt="系统架构图" width="85%"/></b>
-</div>
-
-- **后端**：FastAPI + SQLAlchemy(async) + MySQL + Redis（会话缓存 / 流式缓冲）
-- **Agent 编排**：LangChain / LangGraph，ReAct 与 Plan-and-Execute 双模式；ToolRegistry 统一管理 9 组内置工具 + MCP 动态工具，关键词路由按需加载
-- **记忆**：滑动窗口 + 里程碑摘要 + Redis 热缓存的三级压缩
-- **检索**：ChromaDB 向量库 + BM25 + CrossEncoder 重排序（BAAI/bge-reranker-v2-m3）
-- **模型层**：DashScope（百炼）⇄ Ollama（本地）一键切换；Chat / Thinking / Embedding / Vision / Classifier / Plan 多模型组合
-- **基础设施**：APScheduler 定时任务（回收站清理、孤儿附件清理）、Langfuse 可观测性
-
----
-
-## 🧰 技术栈
-
-| 层 | 技术 |
-| :--- | :--- |
-| 前端 | React 19 · TypeScript · Vite · TailwindCSS · TipTap · Zustand · i18next |
-| 后端 | Python 3.10+ · FastAPI · uvicorn · APScheduler |
-| Agent | LangChain · LangGraph · langchain-openai（DashScope 兼容端点）· langchain-mcp-adapters（MCP 客户端）· Langfuse |
-| 外部服务 | DeepL 翻译 · Wolfram Alpha 计算 · Edge TTS 语音 · Tavily 联网搜索（MCP） |
-| 数据库 | MySQL 8 · Redis · ChromaDB（向量库）· rank-bm25（混合召回） |
-| 模型 | DashScope（qwen 系列）/ Ollama（本地）· sentence-transformers（CrossEncoder 重排序）· tiktoken（Token 估算）· imageio-ffmpeg（视频抽帧） |
-
----
-
-## 🚀 快速开始
+## 3. 安装方法
 
 ### 环境要求
 
-| 依赖 | 版本要求 |
-| :--- | :--- |
+| 依赖 | 版本 |
+|:---|:---|
 | Python | ≥ 3.10 |
 | Node.js | ≥ 18 |
-| MySQL | 8.x（创建数据库 `raglearn`） |
-| Redis | 服务器 ≥ 6.x（Python 客户端为 `redis 5.x`） |
-| 模型 | 二选一：① 阿里云百炼 `DASHSCOPE_API_KEY` ② Ollama（本地模型） |
+| MySQL | 8.x |
+| Redis | ≥ 6.x |
 
-### 1️⃣ 配置后端
+### 3.1 克隆项目
 
 ```bash
-# 克隆项目（仓库名 RAG_LearnLittleCode，克隆目录同名）
-git clone https://github.com/qiaojoin586-droid/RAG_LearnLittleCode.git && cd RAG_LearnLittleCode
-
-# 创建虚拟环境并安装依赖
-python -m venv .venv
-.venv\Scripts\activate        # Windows
-source .venv/bin/activate     # macOS / Linux
-
-pip install -r requirements.txt
-
-# 配置环境变量
-copy .env.example .env        # Windows
-cp .env.example .env          # macOS / Linux
+git clone https://github.com/qiaojoin586-droid/RAG_LearnLittleCode.git
+cd RAG_LearnLittleCode
 ```
 
-编辑 `.env`，至少填写：
+### 3.2 配置后端
+
+```bash
+# 创建虚拟环境
+python -m venv .venv
+.venv\Scripts\activate     # Windows
+# source .venv/bin/activate  # macOS / Linux
+
+# 安装依赖
+pip install -r requirements.txt
+
+# 创建配置文件
+cp .env.example .env
+```
+
+编辑 `.env`，填写以下必填项：
 
 ```ini
-# 模型提供商：dashscope（云）/ ollama（本地）
+# 模型提供商
 MODEL_PROVIDER=dashscope
-DASHSCOPE_API_KEY=sk-xxxxxx
+DASHSCOPE_API_KEY=sk-你的百炼API密钥
 
 # 数据库
 MYSQL_USER=root
-MYSQL_PASSWORD=your_password
+MYSQL_PASSWORD=你的密码
 MYSQL_DATABASE=raglearn
 
 # Redis
 REDIS_HOST=localhost
 REDIS_PORT=6379
 
-# 邮件（可选，QQ 邮箱授权码，非登录密码；you_qq_email 替换为你的 QQ 邮箱）
-SMTP_USERNAME=you_qq_email
-SMTP_PASSWORD=your_smtp_auth_code
+# JWT 签名密钥（生成命令: python -c "import secrets; print(secrets.token_hex(32))"）
+JWT_SECRET=你的随机密钥
 ```
 
-### 📦 初始化数据库（首次运行）
+> 💡 获取 DashScope API Key：访问 [阿里云百炼控制台](https://bailian.console.aliyun.com/)，新用户有免费额度。
+
+### 3.3 创建数据库
 
 ```sql
 CREATE DATABASE raglearn CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-其他关键配置项（完整清单见 `.env.example`，共 59 项）：
-
-| 配置项 | 说明 | 必填 |
-| :--- | :--- | :--- |
-| `VISION_MODEL` | 视觉模型（如 `qwen-vl-max`），**上传图片/视频附件时必须配置**，否则多模态不可用 | 附件场景必填 |
-| `CLASSIFIER_MODEL` / `PLAN_MODEL` | 轻量模型（L2 分类 / 计划生成），默认 `qwen3-flash`，留空自动回退主模型 | 否 |
-| `JWT_SECRET` | Token 签名密钥，**生产环境必须修改** | 生产必改 |
-| `HF_HUB_OFFLINE` | HuggingFace 离线模式，默认 `1`（阻止在线下载模型） | 否 |
-| `TRACE_SINK` | 模型调用 trace 通道（`log` / `db` / `langfuse`），默认 `log,db`；选 `langfuse` 需自行部署或注册 Langfuse 平台 | 否 |
-| `TAVILY_API_KEY` | Tavily 联网搜索（MCP）。未配置时运行 keyless 模式（搜索可用，crawl/map/research 不可用） | 否 |
-| `DEEPL_API_KEY` | DeepL 翻译工具，未配置时返回"未配置"提示 | 否 |
-| `WOLFRAM_APP_ID` | Wolfram Alpha 计算工具，未配置时返回"未配置"提示 | 否 |
-| `PPT_ENGINE` | PPT 生成引擎（`python_pptx` 本地 / `aspose` 云端），默认 `python_pptx`；`aspose` 需另配 `ASPOSE_CLIENT_ID` / `ASPOSE_CLIENT_SECRET` | 否 |
-
-> 🖥️ 选择 `MODEL_PROVIDER=ollama`（本地）时，需配置 `OLLAMA_BASE_URL`（默认 `http://localhost:11434`）、`OLLAMA_CHAT_MODEL`、`OLLAMA_EMBED_MODEL`，并确保本地已拉取对应模型；视觉附件还需 `OLLAMA_VISION_MODEL`。
-
-### 2️⃣ 启动后端
-
-```bash
-python main.py
-# 或 uvicorn main:app --reload
-```
-
-服务启动后：API 文档 → `http://localhost:8000/docs`（默认端口 8000）
-
-### 3️⃣ 启动前端
+### 3.4 安装前端依赖
 
 ```bash
 cd front
 npm install
-npm run dev
 ```
 
-浏览器访问 → `http://localhost:5173`
+### 3.5 首次运行注意事项
 
-### 🧪 默认测试账号
-
-| 用户名 | 密码 | 说明 |
-| :--- | :--- | :--- |
-| `admin` | `admin1234` | 仅 `APP_ENV != production` 时自动创建（或显式 `ENABLE_TEST_USER=true`） |
-
-> 💡 首次运行提示：
-> - **重排序模型首次下载**：`BAAI/bge-reranker-v2-m3`（约 1GB）需从 HuggingFace 下载。首次部署请临时设置 `HF_HUB_OFFLINE=0`，下载完成后可恢复离线模式
-> - 切换 Embedding 提供商后需**删除并重建 ChromaDB 向量库**（`data/chroma/`）；切换模型提供商后需重启服务
-> - 生产环境：`APP_ENV=production`、`JWT_SECRET` 必须为强随机值（启动强校验，公开默认值会拒绝启动）、`LOG_LEVEL=INFO`、`LOG_FORMAT=json`、`CORS_ORIGINS` 配置前端域名白名单（使用 `*` 时自动关闭凭据跨域）
-
----
-
-## 🐳 生产部署（Docker Compose）
-
-```bash
-cp .env.example .env          # 配置全部环境变量（JWT_SECRET 必填强随机值）
-docker compose up -d --build
-# 前端 http://localhost/（nginx 反代 /api，SSE 已禁用缓冲）
-# 健康检查: GET /health（存活） /ready（就绪，含 MySQL/Redis 连通探测） /metrics（Prometheus）
-```
-
-要点：
-
-- **数据库迁移**：启动时 `alembic upgrade head` 自动执行（空库建表 / 遗留库自动 stamp）。新增模型后生成迁移：
-  ```bash
-  .venv/Scripts/python.exe -m alembic revision --autogenerate -m "描述"
-  .venv/Scripts/python.exe -m alembic upgrade head
+- **重排序模型下载**：首次启动会从 HuggingFace 镜像下载 `BAAI/bge-reranker-v2-m3`（约 1GB），需 2-5 分钟。如果下载失败，在 `.env` 中设置：
+  ```ini
+  HF_ENDPOINT=https://hf-mirror.com
   ```
-- **重排序模型**：容器内需可访问本地模型缓存（默认 `HF_HUB_OFFLINE=1`）。把本机 `~/.cache/huggingface` 拷到 `./huggingface_cache/`（或设置 `HF_CACHE_DIR`），或在构建时 `docker build --build-arg PRELOAD_MODELS=true .`
-- **端口**：`8000` 仅为本机调试暴露，外部流量统一走前端 nginx（80）
-- **单进程部署**：多 worker/多实例前需先完成 Redis 化限流、scheduler 去重与 ChromaDB 多进程写冲突改造（见已知限制）
-- **监控**：`/metrics` 暴露 Prometheus 指标（HTTP 计数/耗时）；`/ready` 就绪探针检查后台初始化 + MySQL/Redis 连通性
+- **视觉模型**（可选）：设置 `VISION_MODEL=qwen-vl-max` 启用图片/视频理解
+- **邮件服务**（可选）：配置 `SMTP_USERNAME` / `SMTP_PASSWORD` 启用注册验证码
 
 ---
 
-## 🔌 API 端点概览
+## 4. 使用方法
 
-所有业务路由统一前缀 `/api/v1`，完整交互文档见 Swagger → `http://localhost:8000/docs`
+### 4.1 启动服务
 
-| 模块 | 端点 | 说明 |
-| :--- | :--- | :--- |
-| 认证 | `POST /auth/register` · `POST /auth/login` · `POST /auth/send-code` | 注册（邮箱验证码）/ 登录 / 发送验证码 |
-| 对话 | `POST /chat/query` | **Agent 流式对话（SSE）**，ReAct / Plan-Execute 混合路由 |
-| 对话 | `POST /chat/rag` | RAG 检索问答 |
-| 对话 | `POST /chat/files` · `GET /chat/files/{id}` · `DELETE /chat/files/{file_id}` | 上传 / 预览 / 删除（未绑定）附件 |
-| 会话 | `GET /chat/sessions` · `DELETE /chat/sessions/{id}` · `GET /chat/{id}/messages` · `PUT /chat/{id}/title` | 会话管理（列表 / 删除 / 历史 / 改名） |
-| 笔记 | `GET/POST /note` · `GET/PUT/DELETE /note/{id}` | 笔记 CRUD |
-| 笔记 | `GET /note/recycle-bin` · `POST /note/{id}/restore` · `DELETE /note/{id}/permanent` | 回收站 |
-| 笔记 | `POST /note/search` · `POST /note/autocomplete` · `POST /note/write-assistant` | 语义搜索 / AI 补全 / 写作辅助 |
-| 知识库 | `POST /knowledge/upload`（SSE 进度）· `GET /knowledge/documents` | 文档上传与管理 |
-| 回顾 | `GET /review/today` · `POST /review/{id}/complete` · `GET /review/stats` | 艾宾浩斯回顾 |
-| 模板 | `GET/POST /note-template` · `PUT/DELETE /note-template/{id}` | 笔记模板 |
-| PPT | `GET /ppt/{file_id}` · `POST /ppt-template/upload` · `GET/DELETE /ppt-template` | 下载生成的 PPT / PPT 模板管理 |
-| TTS | `GET /tts/{file_id}` | 下载 TTS 生成的 MP3 音频 |
-| 用量 | `GET /usage/summary` | 模型调用用量与费用 |
-| 健康 | `GET /health` · `GET /ready` | 存活 / 就绪探针 |
+**后端**（先启动）：
+```bash
+python main.py
+# 服务启动在 http://localhost:8001
+# API 文档: http://localhost:8001/docs
+```
 
-### SSE 事件协议（`POST /chat/query`）
+**前端**（另开终端）：
+```bash
+cd front
+npm run dev
+# 服务启动在 http://localhost:3000
+```
 
-请求体字段：`message`（可空，为空时必须带 `attachment_ids`）· `session_id` · `enable_thinking` · `idempotency_key` · `attachment_ids`
+### 4.2 登录
 
-| 事件 | 说明 |
-| :--- | :--- |
-| `thinking` | 思考阶段提示（`stage`: rag / processing / attachment） |
-| `response` | 逐 token 回复内容 |
-| `tool_start` / `tool_end` | 工具调用开始 / 完成（含耗时） |
-| `tool_file` | 工具产出文件（PPT / TTS），含 `file_id` 与下载地址，用于渲染下载卡片 |
-| `plan_start` / `plan_step` / `plan_step_start` / `plan_step_end` / `plan_synthesize` / `plan_complete` | Plan-and-Execute 全流程事件 |
-| `plan_fallback` | Plan 执行失败，自动降级为 ReAct |
-| `error` | 错误信息（含超时） |
-| `done` | 流结束，含 `session_id`；RAG 命中时附 `sources`（引用来源，最多 3 条） |
+浏览器访问 `http://localhost:3000`，使用测试账号登录：
+
+| 用户名 | 密码 |
+|:---|:---|
+| `admin` | `admin1234` |
+
+> 测试账号仅在 `APP_ENV=development` 时自动创建
+
+### 4.3 开始使用
+
+1. **对话**：直接在聊天框输入问题，AI 会回答
+2. **深度思考**：点击输入框旁的 🧠 按钮开启，复杂问题回答更深入（响应稍慢）
+3. **创建笔记**：对 AI 说"帮我创建一条笔记，标题是..."，AI 自动调用笔记工具
+4. **上传文档**：点击 📎 上传 PDF/Markdown/TXT，上传后对话中 AI 可基于文档内容回答
+5. **搜索知识**：对 AI 说"搜索关于 XX 的笔记"，或直接使用笔记页面的搜索功能
+6. **上传图片**：点击 📎 上传图片，视觉模型会描述和分析图片内容
 
 ---
 
-## ⚙️ 配置说明
+## 5. 输入输出示例
 
-系统行为可通过 `config/` 下的 YAML 文件调优（无需改代码）：
+### 5.1 基础对话
 
-| 文件 | 作用 | 核心配置项 |
-| :--- | :--- | :--- |
-| `config/agent.yaml` | **Agent 行为配置**（系统核心） | 迭代上限、Plan-Execute 各阶段超时、L1 规则 + L2 LLM 分类、工具分组与关键词路由、MCP Server 配置（`mcp_servers` + 工具白名单）、Token 预算、记忆压缩阈值、邮件限流 |
-| `config/chroma.yaml` | 向量库配置 | 持久化目录、集合名、文本切片参数、重排序模型 |
-| `config/prompt.yaml` | 提示词模板配置 | 提示词加载相关 |
-| `config/pricing.yaml` | 模型定价种子 | 按 input / output token 单价计价（元 / 千 token），启动时 upsert 进 `model_pricing` 表 |
+**输入**：
+```
+你好，请用三句话介绍人工智能
+```
 
-`prompts/` 目录存放 12 个 Agent 提示词文件，可直接编辑调优，如 `main_prompt.txt`（主 Agent，已声明 MCP 与外部 API 工具的使用规则）、`plan_generation.txt`（计划生成）、`classify_complexity.txt`（L2 分类）、`rag_summarize.txt`（RAG 摘要）等。
+**SSE 流式输出**（`POST /api/v1/chat/query`）：
+```
+data: {"type":"thinking","stage":"processing","content":"正在思考..."}
+data: {"type":"response","content":"人工智能（AI）是计算机科学的一个分支"}
+data: {"type":"response","content":"，旨在创建能够模拟人类智能的系统"}
+data: {"type":"response","content":"..."}
+data: {"type":"done","session_id":"c3e2db06-def5-4267-bc0d"}
+```
+
+**最终回复**：
+```
+人工智能（AI）是计算机科学的一个分支，旨在创建能够模拟人类智能的系统。
+它涵盖机器学习、自然语言处理、计算机视觉等领域。
+现代AI已广泛应用于医疗诊断、自动驾驶、智能助手等场景。
+```
+
+### 5.2 Agent 工具调用 — 创建笔记
+
+**输入**：
+```
+帮我创建一条笔记，标题是"RAG学习笔记"，内容包含RAG的定义、核心流程和三个优势
+```
+
+**SSE 流式输出**：
+```
+data: {"type":"thinking","stage":"processing","content":"正在思考..."}
+data: {"type":"tool_start","tool":"create_note_tool","args":"{"title":"RAG学习笔记",...}"}
+data: {"type":"thinking","stage":"processing","content":"正在创建笔记..."}
+data: {"type":"tool_end","tool":"create_note_tool","result":"笔记创建成功","duration_ms":156}
+data: {"type":"response","content":"已为你创建笔记「RAG学习笔记」，包含RAG的定义、核心流程和优势说明。"}
+data: {"type":"done","session_id":"c3e2db06-def5-4267-bc0d"}
+```
+
+### 5.3 知识库文档上传与 RAG 检索
+
+**Step 1 — 上传文档**（`POST /api/v1/knowledge/upload`）：
+
+**输入**：上传 `test.txt`（内容："RAG stands for Retrieval-Augmented Generation..."）
+
+**SSE 进度输出**：
+```
+data: {"event_type":"processing","stage":"saving","message":"正在保存文件..."}
+data: {"event_type":"processing","stage":"parsing","message":"正在解析文档内容..."}
+data: {"event_type":"processing","stage":"splitting","message":"文本切片完成，共 1 个片段"}
+data: {"event_type":"processing","stage":"vectorizing","message":"正在向量化..."}
+data: {"event_type":"completed","progress":100,"message":"文档处理完成"}
+data: {"event_type":"finish"}
+```
+
+**Step 2 — RAG 检索**（`POST /api/v1/chat/rag`）：
+
+**输入**：
+```json
+{"query": "什么是RAG", "top_k": 3}
+```
+
+**输出**：
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "answer": "RAG stands for Retrieval-Augmented Generation, a technique that combines information retrieval with language generation.",
+    "sources": [
+      {
+        "content": "RAG stands for Retrieval-Augmented Generation...",
+        "source": "knowledge",
+        "score": 0.6343,
+        "metadata": {"filename": "test.txt", "document_id": "1"}
+      }
+    ]
+  }
+}
+```
+
+### 5.4 笔记 CRUD
+
+**创建笔记**（`POST /api/v1/note`）：
+
+请求：
+```json
+{"title": "Python学习路线", "content": "基础语法 → 面向对象 → Web框架 → 数据科学", "tags": ["Python", "学习"]}
+```
+
+响应：
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "id": "7ef28a2c-7bf4-46e2-99c2-8f983336312b",
+    "title": "Python学习路线",
+    "content": "基础语法 → 面向对象 → Web框架 → 数据科学",
+    "tags": ["Python", "学习"],
+    "category": null,
+    "created_at": "2026-08-11T10:15:04",
+    "updated_at": "2026-08-11T10:15:04"
+  }
+}
+```
+
+**搜索笔记**（`POST /api/v1/note/search`）：
+
+请求：
+```json
+{"query": "Python", "top_k": 5}
+```
+
+响应：
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "query": "Python",
+    "results": [
+      {"content": "基础语法 → 面向对象 → Web框架 → 数据科学", "score": 0.82, "note_id": "7ef28a2c-..."}
+    ]
+  }
+}
+```
+
+### 5.5 深度思考对比
+
+| | 关闭深度思考 | 开启深度思考 🧠 |
+|:---|:---|:---|
+| 响应速度 | 2-5 秒 | 10-30 秒 |
+| 推理过程 | 不展示 | 实时展示思考链 |
+| 回答质量 | 直接给答案 | 分步推导，更严谨 |
+
+**示例**："有3个盒子，1个有奖。你选1号，主持人开3号是空的。该不该换？"
+
+关闭深度思考 → "应该换，换的中奖概率是 2/3。"
+
+开启深度思考 → "这是蒙提霍尔问题。让我逐步分析：初始每盒 1/3 概率。若奖品在1号(1/3)→换则输；奖品在2号(1/3)→主持人必开3号→换则赢；奖品在3号(1/3)→主持人必开2号→换则赢。结论：换的中奖概率 2/3，坚持 1/3，应该换。"
+
+### 5.6 登录认证
+
+**请求**（`POST /api/v1/auth/login`）：
+```json
+{"username": "admin", "password": "admin1234"}
+```
+
+**响应**：
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "access_token": "eyJhbGciOiJIUzI1NiIs...",
+    "refresh_token": "eyJhbGciOiJIUzI1NiIs...",
+    "token_type": "bearer",
+    "expires_in": 1800
+  }
+}
+```
+
+> 所有 API 请求需携带 `Authorization: Bearer <access_token>`，详细文档见 `http://localhost:8001/docs`
 
 ---
 
 ## 📁 项目结构
 
 ```
-RAG_LearnLittleCode/          # 本地目录名可自由修改
-├── main.py                  # FastAPI 入口（生命周期 / 中间件 / 路由注册）
+RAG_LearnLittleCode/
+├── main.py                  # FastAPI 入口
 ├── app/
-│   ├── core/                # 日志、异常处理、model_trace、scheduler
-│   ├── db/                  # SQLAlchemy、Redis 客户端
-│   ├── models/              # ORM 模型（用户 / 笔记 / 知识库 / 模板 / 工具审计）
-│   ├── rag/                 # RAG 核心（向量库、检索、RagService、任务队列）
-│   ├── routers/             # API 路由（chat / note / user / knowledge ...）
-│   ├── services/            # 业务服务（笔记、邮件、用量、记忆压缩、模板）
-│   ├── ai_service/          # Agent 编排（ReAct / Plan-Execute / 工具注册表 / MCP 管理器 / 流式输出 / 中间件）
-│   ├── utils/               # 模型工厂、Prompt 加载、Token 估算
-│   └── schemas/             # Pydantic 模型
+│   ├── ai_service/          # Agent 编排（ReAct / Plan-Execute / 工具注册 / MCP / 流式）
+│   ├── core/                # 日志、异常处理、限流、metrics、model_trace
+│   ├── db/                  # SQLAlchemy 异步引擎 + Redis 客户端
+│   ├── models/              # ORM 模型（用户 / 笔记 / 知识库 / 会话 / 审计）
+│   ├── rag/                 # RAG 核心（向量库、检索、RagService、重排序）
+│   ├── routers/             # API 路由（15 个模块，46 个端点）
+│   ├── schemas/             # Pydantic 请求/响应模型
+│   ├── services/            # 业务服务（笔记、邮件、PPT、用量、记忆压缩）
+│   └── utils/               # 模型工厂、认证工具、配置加载、SSRF 守卫
 ├── config/                  # YAML 配置（agent / chroma / prompt / pricing）
-├── front/                   # React 19 + Vite 前端
-├── prompts/                 # Agent 系统提示词（main / plan / classify 等 12 个）
+├── front/                   # React 19 + Vite + TailwindCSS 前端
+├── prompts/                 # Agent 系统提示词（12 个）
 ├── templates/               # 邮件 HTML 模板
-├── data/                    # ChromaDB 持久化 + 用户附件（运行时生成）
-├── logs/                    # 日志输出目录（运行时生成）
-├── tests/eval/              # AI 对话黄金评测器
-├── docs/                    # 架构图与升级设计方案
-├── .env.example              # 环境变量模板（59 项，含完整注释）
+├── alembic/                 # 数据库迁移脚本
+├── tests/                   # 测试
+├── .env.example             # 环境变量模板
 └── requirements.txt
 ```
 
 ---
 
-## ✅ 测试与评测
+## ⚙️ 配置说明
 
-### 后端冒烟测试（CI 可跑，无外部依赖）
+| 配置文件 | 作用 |
+|:---|:---|
+| `config/agent.yaml` | Agent 行为中枢：迭代上限、工具分组、关键词路由、超时、MCP Server 配置 |
+| `config/chroma.yaml` | 向量库：持久化目录、切片参数、重排序模型 |
+| `config/prompt.yaml` | 提示词模板配置 |
+| `config/pricing.yaml` | 模型定价种子（按 token 计价） |
+| `prompts/*.txt` | 12 个 Agent 提示词，可直接编辑调优 |
+
+系统行为通过 YAML 文件调优，无需改代码，修改后重启服务生效。
+
+---
+
+## 🔌 API 端点概览
+
+所有业务路由统一前缀 `/api/v1`，完整交互文档见 `http://localhost:8001/docs`
+
+| 模块 | 端点 | 说明 |
+|:---|:---|:---|
+| 认证 | `POST /auth/register` `POST /auth/login` `POST /auth/send-code` | 注册 / 登录 / 发送验证码 |
+| 认证 | `POST /auth/refresh` `POST /auth/logout` | Token 刷新 / 登出 |
+| 认证 | `GET /auth/sessions` `DELETE /auth/sessions/{id}` | 设备会话管理 |
+| 对话 | `POST /chat/query` | **Agent 流式对话（SSE）** |
+| 对话 | `POST /chat/rag` | RAG 检索问答 |
+| 对话 | `POST /chat/files` `GET /chat/files/{id}` | 附件上传 / 预览 |
+| 会话 | `GET /chat/sessions` `DELETE /chat/sessions/{id}` | 会话列表 / 删除 |
+| 会话 | `GET /chat/{id}/messages` `PUT /chat/{id}/title` | 历史消息 / 改标题 |
+| 笔记 | `GET/POST /note` `GET/PUT/DELETE /note/{id}` | 笔记 CRUD |
+| 笔记 | `POST /note/search` | 语义搜索 |
+| 笔记 | `GET /note/recycle-bin` `POST /note/{id}/restore` | 回收站 |
+| 知识库 | `POST /knowledge/upload` `GET /knowledge/documents` | 文档上传 / 列表 |
+| 回顾 | `GET /review/today` `POST /review/{id}/complete` | 艾宾浩斯回顾 |
+| 其他 | `GET /note-template` `GET /usage/summary` | 模板 / 用量统计 |
+
+### SSE 事件协议（`POST /chat/query`）
+
+| 事件 | 说明 |
+|:---|:---|
+| `thinking` | 思考阶段（stage: rag / processing / attachment / thinking） |
+| `response` | 逐 token 回复内容 |
+| `tool_start` / `tool_end` | 工具调用开始 / 完成（含耗时） |
+| `tool_file` | 工具产出文件（PPT / TTS），含 `file_id` 与下载地址 |
+| `done` | 流结束，含 `session_id`；RAG 命中时附 `sources` |
+| `error` | 错误信息 |
+
+---
+
+## 🧪 测试
 
 ```bash
-pip install -r requirements-dev.txt   # 开发/测试依赖（生产依赖见 requirements.txt）
-python -m pytest tests/ -v            # SSRF 守卫 / JWT 强校验 / MCP 包装等纯逻辑测试
-```
+# 后端测试
+pip install -r requirements-dev.txt
+python -m pytest tests/ -v
 
-> 根目录旧调试脚本（`test_*.py` / `repro_tmp.py` 等）已移入 [scripts/manual/](scripts/manual/)，用途与处置建议见其 README；它们依赖真实 DB/LLM，不属于 CI 测试。
-
-### 前端测试与质量门禁（CI 同步执行）
-
-```bash
+# 前端测试
 cd front
-npm run lint      # eslint（typescript-eslint + react-hooks）
-npm test          # vitest（SSE 解析器 / client 401 刷新）
-npm run build     # tsc --noEmit + vite build（tsconfig 已开启 strict）
+npm test
+npm run lint
+npm run build
 ```
-
-### AI 对话黄金评测
-
-内置 **AI 对话黄金评测器**：读取 `golden_cases.json`，逐条调用 `/chat/query`（SSE 流式），按关键词判定 PASS/FAIL，覆盖对话、RAG、笔记、安全注入等分类：
-
-```bash
-.venv/Scripts/python.exe -X utf8 tests/eval/eval_runner.py [--base-url URL] [--interval 7] [--keep]
-```
-
-报告输出至 `tests/eval/results/report_*.json`。
-
----
-
-## ⚠️ 已知限制
-
-- **流式 Token 统计**：DashScope 兼容模式下流式响应的 usage 可能为 null，影响成本统计精度
-- **多模态 + 深度思考**：视觉模型不支持思考模式，上传附件时自动走视觉模型，二者不可组合
-- **工具按需加载**：`default_groups` 为全量加载兜底（关键词规则仅作加速），后续可改为纯按需加载以节省上下文窗口
-- **MCP 依赖本机环境**：Tavily（npx）与 Fetch（uvx）MCP Server 需要 Node 环境与网络；任一 Server 连接失败自动降级跳过，不影响 Agent 主流程
-- **邮件限流**：`send_email` 限流为进程内滑动窗口（10 封 / 小时 / 用户），多进程部署需迁移至 Redis
-- **回收站**：笔记回收站最长保留 14 天，由定时任务自动彻底删除
-
----
-
-## 🤝 开发指南
-
-### 代码风格
-
-- **后端**：Python PEP 8，类与方法使用中文 docstring；按 `routers / services / models / schemas / rag / ai_service` 分层，新增能力先写 service 再挂路由
-- **前端**：TypeScript 严格模式（`npm run build` 即 `tsc && vite build`，构建前必须通过类型检查）；函数式组件 + hooks + Zustand 状态管理
-
-### Git 约定
-
-- 分支：`main` 为稳定基线，新功能在独立分支开发（如 `Agent`），验证通过后合入
-- 提交信息：中文一句话描述改动内容与动机，重要改动附编号（如 P2-3）
-- 提交前运行 `python -m pytest tests/`、前端 `npm run lint && npm test && npm run build` 确认无回归（CI 会全量执行）
-
-### 配置调参
-
-- `config/agent.yaml` 是 Agent 行为中枢：工具分组、关键词路由、各阶段超时、Token 预算、记忆压缩阈值、邮件限流均可在此调整，修改后重启服务生效
-- `prompts/*.txt` 提示词可直接编辑，无需改代码
-- **新增内置工具**：在 `app/ai_service/agent_tools.py` 用 `@tool` 注册 → 加入 `config/agent.yaml` 的 `tool_groups` 与 `tool_routing.keyword_rules` → 用黄金评测器回归验证
-- **新增 MCP 工具**：在 `config/agent.yaml` 的 `mcp_servers` 添加 Server 配置，用 `tools_include` 白名单过滤暴露的工具（自动注册进 "mcp" 组，随 `default_groups` 加载）
-
----
-
-## 📚 文档
-
-- [系统架构图](docs/System_Architecture_Diagram.png)
-- [AI 对话栏文件上传功能设计方案](docs/AI对话栏文件上传功能设计方案.md)
-- [邮箱验证与笔记回收站功能设计方案](docs/邮箱验证与笔记回收站功能设计方案.md)
-- [更多升级设计方案](docs/)
 
 ---
 
 ## 📄 License
 
 [MIT](LICENSE) © 2026 [Qoin](https://github.com/qiaojoin586-droid)
-
-本项目基于 **MIT 协议**开源：允许自由使用、修改与分发，需保留版权声明。
-
-> 🔗 仓库：[RAG_LearnLittleCode](https://github.com/qiaojoin586-droid/RAG_LearnLittleCode.git) · 📚 [更多设计文档](docs/)

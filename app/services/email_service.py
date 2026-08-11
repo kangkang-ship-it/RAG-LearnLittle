@@ -14,8 +14,8 @@ import asyncio
 import html as html_lib
 import logging
 import os
-import random
 import re
+import secrets
 from email.header import Header
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
@@ -161,8 +161,8 @@ class EmailService:
 
     @staticmethod
     def generate_code() -> str:
-        """生成 6 位数字验证码"""
-        return f"{random.randint(0, 999999):06d}"
+        """生成 6 位数字验证码（使用密码学安全的 secrets 模块）"""
+        return f"{secrets.randbelow(1000000):06d}"
 
     async def send_verification_code(self, to: str) -> str:
         """

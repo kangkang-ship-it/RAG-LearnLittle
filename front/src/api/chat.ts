@@ -120,16 +120,37 @@ export async function deleteChatFile(fileId: string): Promise<void> {
 }
 
 /**
- * 获取附件鉴权预览 URL
+ * 获取附件鉴权预览 URL（异步版）
  *
  * <img>/<video> 标签无法携带 Authorization Header，
- * 拼 ?token= 短时效 access token 作为回显兜底（仅用于当次回显）。
+ * 换取 60 秒短时效 attachment token 替代 30 分钟 access token（修复 S3：JWT URL 泄漏）。
  *
  * @param fileId - 附件 ID
- * @returns 带 token 的预览 URL
+ * @returns 带短时效 token 的预览 URL
  */
-export function getAttachmentUrl(fileId: string): string {
-  const token = localStorage.getItem('jwt_token') || '';
+let _attachmentTokenCache: { token: string; expiresAt: number } | null = null;
+
+export async function getAttachmentUrl(fileId: string): Promise<string> {
+  if (!_attachmentTokenCache || Date.now() > _attachmentTokenCache.expiresAt) {
+    const accessToken = localStorage.getItem('jwt_token') || '';
+    try {
+      const resp = await fetch(endpoints.auth.attachmentToken, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        _attachmentTokenCache = {
+          token: data.data?.token || '',
+          expiresAt: Date.now() + ((data.data?.expires_in || 60) - 5) * 1000,
+        };
+      } else {
+        _attachmentTokenCache = { token: accessToken, expiresAt: Date.now() + 55_000 };
+      }
+    } catch {
+      _attachmentTokenCache = { token: accessToken, expiresAt: Date.now() + 55_000 };
+    }
+  }
   const sep = endpoints.chat.fileDetail(fileId).includes('?') ? '&' : '?';
-  return `${endpoints.chat.fileDetail(fileId)}${sep}token=${encodeURIComponent(token)}`;
+  return `${endpoints.chat.fileDetail(fileId)}${sep}token=${encodeURIComponent(_attachmentTokenCache.token)}`;
 }

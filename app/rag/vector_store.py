@@ -146,15 +146,17 @@ class VectorStoreService:
         
         # 生成嵌入向量
         embeddings = await self._generate_embeddings(documents)
-        
-        # 批量 upsert
-        target.upsert(
+
+        # 批量 upsert（offload 到线程池，避免阻塞事件循环）
+        import asyncio
+        await asyncio.to_thread(
+            target.upsert,
             ids=ids,
             documents=documents,
             metadatas=metadatas,
             embeddings=embeddings,
         )
-        
+
         logger.debug(f"向量写入完成: collection={collection}, count={len(ids)}")
     
     async def search_documents(
@@ -178,12 +180,14 @@ class VectorStoreService:
         # 生成查询向量
         query_embedding = await self._generate_embeddings([query])
         
-        # ChromaDB 查询
-        results = self._rag_collection.query(
+        # ChromaDB 查询（offload 到线程池，避免阻塞事件循环）
+        import asyncio
+        results = await asyncio.to_thread(
+            self._rag_collection.query,
             query_embeddings=query_embedding,
             n_results=top_k,
             where={"user_id": user_id},
-            include=["documents", "metadatas", "distances"]
+            include=["documents", "metadatas", "distances"],
         )
         
         # 格式化结果
@@ -216,11 +220,13 @@ class VectorStoreService:
         
         query_embedding = await self._generate_embeddings([query])
         
-        results = self._notes_collection.query(
+        import asyncio
+        results = await asyncio.to_thread(
+            self._notes_collection.query,
             query_embeddings=query_embedding,
             n_results=top_k,
             where={"user_id": user_id},
-            include=["documents", "metadatas", "distances"]
+            include=["documents", "metadatas", "distances"],
         )
         
         formatted = []
@@ -244,14 +250,16 @@ class VectorStoreService:
         """
         self._ensure_initialized()
         
-        # 查找匹配的向量 ID
-        results = self._rag_collection.get(
+        import asyncio
+        # 查找匹配的向量 ID（offload 到线程池）
+        results = await asyncio.to_thread(
+            self._rag_collection.get,
             where={"document_id": str(document_id)},
-            include=[]
+            include=[],
         )
-        
+
         if results and results["ids"]:
-            self._rag_collection.delete(ids=results["ids"])
+            await asyncio.to_thread(self._rag_collection.delete, ids=results["ids"])
             logger.info(f"知识库向量删除: document_id={document_id}, count={len(results['ids'])}")
     
     async def delete_note_vectors(self, note_id: str) -> None:
@@ -263,13 +271,15 @@ class VectorStoreService:
         """
         self._ensure_initialized()
         
-        results = self._notes_collection.get(
+        import asyncio
+        results = await asyncio.to_thread(
+            self._notes_collection.get,
             where={"note_id": note_id},
-            include=[]
+            include=[],
         )
-        
+
         if results and results["ids"]:
-            self._notes_collection.delete(ids=results["ids"])
+            await asyncio.to_thread(self._notes_collection.delete, ids=results["ids"])
             logger.info(f"笔记向量删除: note_id={note_id}")
     
     async def compute_route_score(self, query: str) -> float:
@@ -291,10 +301,12 @@ class VectorStoreService:
         
         query_embedding = await self._generate_embeddings([query])
         
-        results = self._rag_collection.query(
+        import asyncio
+        results = await asyncio.to_thread(
+            self._rag_collection.query,
             query_embeddings=query_embedding,
             n_results=1,
-            include=["distances"]
+            include=["distances"],
         )
         
         if results and results["distances"] and results["distances"][0]:
@@ -379,6 +391,9 @@ class VectorStoreService:
             向量数量
         """
         self._ensure_initialized()
+        import asyncio
         target = self._rag_collection if collection == "rag" else self._notes_collection
-        return target.count()
+        # offload ChromaDB 同步调用到线程池
+        count = await asyncio.to_thread(target.count)
+        return count
 

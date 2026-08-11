@@ -13,7 +13,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Text, DateTime, Integer, BigInteger, Float, ForeignKey, JSON, func, UniqueConstraint
+from sqlalchemy import Index, String, Text, DateTime, Integer, BigInteger, Float, ForeignKey, JSON, func, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -125,6 +125,11 @@ class ChatMessage(Base):
     # 附件元数据（JSON 数组：file_id/file_type/original_name/width/height 等）
     # 冗余存储用于消息列表/SSE 回显，权威数据在 chat_attachments 表
     attachments_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
+    # 复合索引：按会话分页查询消息时避免 filesort（修复 P6）
+    __table_args__ = (
+        Index("ix_chat_messages_session_created", "session_id", "created_at"),
+    )
 
     # ========== 关联关系 ==========
     session = relationship("ChatSession", back_populates="messages")

@@ -8,7 +8,7 @@
  * 健壮性：加载失败（404/403/网络错误/token 过期/文件被清理）时显示占位，不显示破图
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X, ImageOff, VideoOff } from 'lucide-react';
 import type { AttachmentMeta } from '../../types/api';
 import { getAttachmentUrl } from '../../api/chat';
@@ -46,8 +46,27 @@ function VideoPlaceholder({ name }: { name: string }) {
 
 export default function AttachmentViewer({ attachments }: AttachmentViewerProps) {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
-  // 加载失败的附件（file_id → 占位）
   const [failed, setFailed] = useState<Record<string, boolean>>({});
+  // 异步预加载附件预览 URL（修复 S3：使用短时效 token 替代 access token）
+  const [urlMap, setUrlMap] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadUrls = async () => {
+      const map: Record<string, string> = {};
+      for (const att of attachments) {
+        if (cancelled) return;
+        try {
+          map[att.file_id] = await getAttachmentUrl(att.file_id);
+        } catch {
+          // 降级：使用现有 URL 或标记失败
+        }
+      }
+      if (!cancelled) setUrlMap(map);
+    };
+    loadUrls();
+    return () => { cancelled = true; };
+  }, [attachments]);
 
   const markFailed = (fileId: string) =>
     setFailed((prev) => (prev[fileId] ? prev : { ...prev, [fileId]: true }));
@@ -64,17 +83,21 @@ export default function AttachmentViewer({ attachments }: AttachmentViewerProps)
         ) : (
           <button
             key={att.file_id}
-            onClick={() => setLightboxUrl(getAttachmentUrl(att.file_id))}
+            onClick={() => urlMap[att.file_id] && setLightboxUrl(urlMap[att.file_id])}
             className="w-24 h-24 rounded-[var(--radius-md)] overflow-hidden border border-[var(--color-border)] hover:opacity-90 transition-opacity"
             title={att.original_name}
           >
-            <img
-              src={getAttachmentUrl(att.file_id)}
-              alt={att.original_name}
-              className="w-full h-full object-cover"
-              loading="lazy"
-              onError={() => markFailed(att.file_id)}
-            />
+            {urlMap[att.file_id] ? (
+              <img
+                src={urlMap[att.file_id]}
+                alt={att.original_name}
+                className="w-full h-full object-cover"
+                loading="lazy"
+                onError={() => markFailed(att.file_id)}
+              />
+            ) : (
+              <div className="w-full h-full bg-[var(--color-card)] animate-pulse" />
+            )}
           </button>
         )
       )}
@@ -85,14 +108,18 @@ export default function AttachmentViewer({ attachments }: AttachmentViewerProps)
           <VideoPlaceholder key={att.file_id} name={att.original_name} />
         ) : (
           <div key={att.file_id} className="w-full max-w-sm">
-            <video
-              src={getAttachmentUrl(att.file_id)}
-              controls
-              preload="metadata"
-              className="w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-black"
-              title={att.original_name}
-              onError={() => markFailed(att.file_id)}
-            />
+            {urlMap[att.file_id] ? (
+              <video
+                src={urlMap[att.file_id]}
+                controls
+                preload="metadata"
+                className="w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-black"
+                title={att.original_name}
+                onError={() => markFailed(att.file_id)}
+              />
+            ) : (
+              <div className="w-full h-24 rounded-[var(--radius-md)] bg-[var(--color-card)] animate-pulse" />
+            )}
             <p className="text-xs text-[var(--color-text-tertiary)] mt-1 truncate">
               ▶ {att.original_name}
             </p>

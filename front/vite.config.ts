@@ -15,7 +15,7 @@ export default defineConfig({
     // 将 API 请求代理到后端 FastAPI 服务
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:8001',
         changeOrigin: true,
         // SSE 流式响应支持：禁用响应缓冲
         configure: (proxy) => {
@@ -31,7 +31,7 @@ export default defineConfig({
         },
       },
       '/static': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:8001',
         changeOrigin: true,
       },
     },
