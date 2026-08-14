@@ -21,6 +21,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.core.logger_handler import logger
 from app.utils.config import get_chroma_config
+from app.rag.bm25 import build_bm25_index, bm25_search, rrf_merge
 
 
 class VectorStoreService:
@@ -199,9 +200,20 @@ class VectorStoreService:
                     "metadata": results["metadatas"][0][i] if results["metadatas"] else {},
                     "score": 1 - (results["distances"][0][i] if results["distances"] else 1),
                 })
-        
+
+        # BM25 关键词检索 + RRF 融合（混合召回）
+        bm25_config = self.config.get("bm25", {})
+        if bm25_config.get("enabled", True):
+            bm25_results = await self._bm25_search(query, user_id, self._rag_collection, top_k)
+            if bm25_results:
+                return rrf_merge(
+                    formatted, bm25_results,
+                    rrf_k=bm25_config.get("rrf_k", 60),
+                    top_k=top_k,
+                )
+
         return formatted
-    
+
     async def search_notes(
         self, query: str, user_id: str, top_k: int = 5
     ) -> List[dict]:
@@ -238,9 +250,64 @@ class VectorStoreService:
                     "note_id": results["metadatas"][0][i].get("note_id", ""),
                     "score": 1 - (results["distances"][0][i] if results["distances"] else 1),
                 })
-        
+
+        # BM25 关键词检索 + RRF 融合（混合召回）
+        bm25_config = self.config.get("bm25", {})
+        if bm25_config.get("enabled", True):
+            bm25_results = await self._bm25_search(query, user_id, self._notes_collection, top_k)
+            if bm25_results:
+                return rrf_merge(
+                    formatted, bm25_results,
+                    rrf_k=bm25_config.get("rrf_k", 60),
+                    top_k=top_k,
+                )
+
         return formatted
-    
+
+    async def _bm25_search(
+        self, query: str, user_id: str, collection, top_k: int
+    ) -> List[dict]:
+        """
+        BM25 关键词检索（语料按 user_id 从 Chroma 现取）
+
+        语料每次从 Collection 现取，不缓存索引：
+        - 遵守单例"禁止存储请求级状态"规范（向量语义与 user_id 无关，语料则强相关）
+        - 天然与 upsert/delete 保持一致，无需失效逻辑
+
+        Returns:
+            与向量检索同构的结果列表 [{content, metadata, score}, ...]（notes 附 note_id）
+        """
+        import asyncio
+
+        # 拉取该用户全部语料（与 delete_document_vectors 相同的过滤模式）
+        corpus_result = await asyncio.to_thread(
+            collection.get,
+            where={"user_id": user_id},
+            include=["documents", "metadatas"],
+        )
+        documents = (corpus_result or {}).get("documents") or []
+        if not documents:
+            return []
+        metadatas = (corpus_result or {}).get("metadatas") or []
+
+        def _run():
+            index = build_bm25_index(documents)
+            hits = bm25_search(index, query, top_k)
+            formatted = []
+            for idx, score in hits:
+                metadata = metadatas[idx] if idx < len(metadatas) else {}
+                item = {
+                    "content": documents[idx],
+                    "metadata": metadata,
+                    "score": score,
+                }
+                if metadata.get("note_id"):
+                    item["note_id"] = metadata["note_id"]
+                formatted.append(item)
+            return formatted
+
+        return await asyncio.to_thread(_run)
+
     async def delete_document_vectors(self, document_id: str) -> None:
         """
         删除知识库文档的向量（按 document_id）

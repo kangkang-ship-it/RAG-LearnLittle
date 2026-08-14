@@ -20,7 +20,12 @@ chroma:
     - "application/pdf"
     - "text/markdown"
     - "text/plain"
-  
+
+  # BM25 混合召回（与向量结果 RRF 融合，中文按字符二元组切词）
+  bm25:
+    enabled: true
+    rrf_k: 60
+
   # 重排序模型
   reranker:
     model_name: "BAAI/bge-reranker-v2-m3"
