@@ -7,8 +7,8 @@
 - react_events / plan_events: 各路径事件流（async generator，产出事件字典）
 
 SSE 格式化仍由路由层（chat.py）完成，事件类型与顺序契约零变化：
-- ReAct 路径：仅转发 response / error（tool_* 不转发，与改造前一致）
-- Plan 路径：转发 plan_* / tool_* / response / error；plan_fallback 后接 ReAct 重跑
+- ReAct 路径：转发 response / error / tool_* / thinking
+- Plan 路径：转发 plan_* / tool_* / thinking / response / error；plan_fallback 后接 ReAct 重跑
 - error 事件后终止（上游据此不发 done、不保存回复）
 
 第二步将把本层迁移为 LangGraph StateGraph（事件总线 + 条件边），
@@ -120,6 +120,8 @@ async def plan_events(
         "plan_start", "plan_step", "plan_step_start", "plan_step_end",
         "plan_synthesize", "plan_complete", "tool_start", "tool_end",
         "tool_file",   # ★ 新增：PPT 生成事件（§6.3 第 2 段）
+        "thinking",    # ★ 新增：步骤执行的思考过程实时转发（与 ReAct 路径一致，
+                       #  Plan 路径耗时最长，最需要消除深度思考期间的零反馈）
     }
     async for event in execute_plan_agent(
         chat_model=ctx.agent_model,
