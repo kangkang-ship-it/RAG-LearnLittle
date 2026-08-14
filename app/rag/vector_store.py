@@ -380,7 +380,7 @@ class VectorStoreService:
         
         return results
     
-    def get_collection_count(self, collection: str = "rag") -> int:
+    async def get_collection_count(self, collection: str = "rag") -> int:
         """
         获取 Collection 中的向量数量
         
