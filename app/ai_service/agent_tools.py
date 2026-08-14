@@ -1,7 +1,7 @@
 """
 Agent 工具集
 
-定义 Agent 可使用的 12 个异步工具：
+定义 Agent 可使用的 15 个异步工具：
 1. what_time_is_now - 获取当前时间
 2. get_user_info_tools - 获取当前用户基本信息（用户名、邮箱、ID）
 3. search_notes_tool - 语义搜索笔记（返回 200 字符摘要）
@@ -14,6 +14,9 @@ Agent 工具集
 10. get_related_notes_tool - 获取关联推荐
 11. send_email - 发送邮件（笔记转 Markdown/PDF 附件发送到用户邮箱）
 12. generate_ppt_tool - 根据选中的笔记生成讲解 PPT（.pptx，设计方案 §4.1）
+13. translate_text - 中英互译（DeepL API）
+14. wolfram_calculate - Wolfram Alpha 计算问答
+15. text_to_speech - 文本转语音（Edge-TTS，生成 MP3）
 """
 
 import json
