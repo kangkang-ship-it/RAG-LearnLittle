@@ -22,8 +22,10 @@ RUN pip install --no-cache-dir -r requirements.lock
 
 # 可选: 预下载重排序模型到镜像（HF_HUB_OFFLINE 在运行时由 main.py 强制开启，
 # 模型必须在本地缓存中存在；此处构建期联网下载一次）
+# 目录需无条件创建：运行时阶段 COPY --from=builder 依赖该路径存在
 ARG PRELOAD_MODELS=false
-RUN if [ "$PRELOAD_MODELS" = "true" ]; then \
+RUN mkdir -p /root/.cache/huggingface \
+    && if [ "$PRELOAD_MODELS" = "true" ]; then \
         python -c "from sentence_transformers import CrossEncoder; CrossEncoder('BAAI/bge-reranker-v2-m3')"; \
     fi
 
