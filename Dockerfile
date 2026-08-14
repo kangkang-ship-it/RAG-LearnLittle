@@ -33,13 +33,13 @@ FROM python:3.12-slim AS runtime
 WORKDIR /app
 
 # 运行时系统库（不装构建工具，控制镜像体积）
+# 注意：两次 apt 安装必须合并为一次——rm lists 会清空包列表，导致后续 install 找不到包
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libmagic1 ffmpeg \
+        nodejs npm \
     && rm -rf /var/lib/apt/lists/* \
     # MCP server 运行时: uvx（mcp-server-fetch）+ npx（tavily-mcp）
-    && pip install --no-cache-dir uv \
-    && apt-get install -y --no-install-recommends nodejs npm \
-    && rm -rf /var/lib/apt/lists/*
+    && pip install --no-cache-dir uv
 
 # 从 builder 阶段复制已安装的依赖与可选模型缓存
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
