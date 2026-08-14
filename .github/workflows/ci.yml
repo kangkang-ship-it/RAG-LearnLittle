@@ -1,9 +1,10 @@
-# ========== CI 流水线（P1: 冒烟验证） ==========
-# 触发: push / pull request 到 main（及 Agent 分支的 PR）
+# ========== CI 流水线 ==========
+# 触发: push / pull request 到 main
 # 内容:
-#   - 后端: 依赖安装（锁定版本）+ pytest 冒烟（纯逻辑测试，无 DB/LLM 依赖）
-#   - 前端: npm ci + tsc 类型检查 + vite 生产构建
-# 后续扩展（P1 阶段 2）: 覆盖率门槛、Docker 镜像构建推送、Alembic 迁移校验
+#   - 后端: 依赖安装（锁定版本）+ 全量编译检查 + pytest 冒烟（纯逻辑测试，无 DB/LLM 依赖）
+#   - 前端: npm ci + eslint + vitest + tsc 类型检查 + vite 生产构建
+#   - Docker: main 分支 push 时构建前后端镜像并推送 GHCR（PR 只跑校验不推镜像）
+# 后续扩展: 覆盖率门槛、Alembic 迁移校验
 
 name: CI
 
@@ -73,3 +74,67 @@ jobs:
       - name: Production build
         working-directory: front
         run: npm run build
+
+  docker:
+    name: Docker (build + push to GHCR)
+    runs-on: ubuntu-latest
+    # 仅 main 分支 push 时构建推送镜像，PR 不推
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Backend image metadata
+        id: meta-backend
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/raglearnlittle-backend
+          tags: |
+            type=sha
+            type=ref,event=branch
+            type=raw,value=latest
+
+      - name: Build & push backend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ steps.meta-backend.outputs.tags }}
+          labels: ${{ steps.meta-backend.outputs.labels }}
+          # 保持默认 PRELOAD_MODELS=false，构建期不下载 1GB 模型
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Frontend image metadata
+        id: meta-front
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/raglearnlittle-front
+          tags: |
+            type=sha
+            type=ref,event=branch
+            type=raw,value=latest
+
+      - name: Build & push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./front
+          file: ./front/Dockerfile
+          push: true
+          tags: ${{ steps.meta-front.outputs.tags }}
+          labels: ${{ steps.meta-front.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

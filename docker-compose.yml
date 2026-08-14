@@ -6,7 +6,8 @@
 #
 # 说明:
 # - 后端 8000 端口仅暴露给本机（供调试/API 直连）；外部访问统一走前端 nginx
-# - APP_ENV 默认 development（自动创建测试账号）；生产请用 docker-compose.prod.yml 覆盖
+# - APP_ENV 默认 development（自动创建测试账号）；生产请设置 APP_ENV=production
+# - 应用镜像已推送 GHCR（CI 自动构建）：可用 `docker compose pull` 拉取代替本地构建
 # - 重排序模型: 本地已缓存时挂载 $HOME/.cache/huggingface 卷即可复用
 
 services:
@@ -41,6 +42,7 @@ services:
     restart: unless-stopped
 
   backend:
+    image: ghcr.io/kangkang-ship-it/raglearnlittle-backend:latest  # 可 pull 代替 build
     build: .
     container_name: raglearn-backend
     env_file:
@@ -69,6 +71,7 @@ services:
     restart: unless-stopped
 
   frontend:
+    image: ghcr.io/kangkang-ship-it/raglearnlittle-front:latest  # 可 pull 代替 build
     build: ./front
     container_name: raglearn-front
     ports:
