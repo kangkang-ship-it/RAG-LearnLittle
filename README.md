@@ -36,6 +36,43 @@
 
 ---
 
+## 🏗️ 系统架构
+
+```mermaid
+flowchart LR
+    subgraph Frontend[前端 React 19]
+        UI[Vite + TailwindCSS]
+    end
+
+    subgraph Backend[后端 FastAPI]
+        API[API 路由层<br/>15 模块 / 46 端点]
+        Authn[JWT 双 Token<br/>设备会话 / 固定窗口限流]
+        Graph[LangGraph 双 Agent<br/>Plan-Execute / ReAct]
+        Tools[15 个内置工具 + MCP]
+        Rag[RAG 管线<br/>HyDE → 向量+BM25 → 重排 → 总结]
+    end
+
+    subgraph Data[存储与外部]
+        MySQL[(MySQL 8)]
+        Redis[(Redis)]
+        Chroma[(ChromaDB)]
+        LLM[大模型<br/>OpenAI 兼容协议]
+    end
+
+    UI <-->|HTTP JSON / SSE 流式| API
+    API --> Authn --> Redis
+    API --> Graph
+    Graph --> Tools
+    Graph --> Rag --> Chroma
+    Rag --> LLM
+    Graph --> LLM
+    API --> MySQL
+```
+
+对话流式响应经 SSE 逐 token 下发（`thinking` / `response` / `tool_*` 事件），协议详见 [SSE 事件协议](#sse-事件协议post-chatquery)。
+
+---
+
 ## 2. 主要功能
 
 ### 🤖 AI 对话
@@ -92,6 +129,8 @@ AI 可以主动调用工具完成复杂任务（15 个内置工具）：
 | 定时任务 | 回收站清理、孤儿附件清理、TTS 文件清理 |
 | 国际化 | 中/英文界面切换，暗色/亮色主题 |
 | 账户安全 | JWT 双 Token 认证、设备管理、频率限制 |
+| 安全防御 | SSRF 地址守卫（ipaddress 网段封禁 + DNS 双重校验）、Redis 固定窗口限流（按端点差异化配额） |
+| 工程化部署 | Docker Compose 一键部署、GitHub Actions CI/CD（pytest + eslint/vitest/tsc + 镜像推送 GHCR）、Prometheus /metrics 指标、Alembic 迁移 |
 
 ---
 
@@ -109,8 +148,8 @@ AI 可以主动调用工具完成复杂任务（15 个内置工具）：
 ### 3.1 克隆项目
 
 ```bash
-git clone https://github.com/qiaojoin586-droid/RAG_LearnLittleCode.git
-cd RAG_LearnLittleCode
+git clone https://github.com/kangkang-ship-it/RAG-LearnLittle.git
+cd RAG-LearnLittle
 ```
 
 ### 3.2 配置后端
@@ -171,6 +210,19 @@ npm install
   ```
 - **视觉模型**（可选）：设置 `VISION_MODEL=qwen-vl-max` 启用图片/视频理解
 - **邮件服务**（可选）：配置 `SMTP_USERNAME` / `SMTP_PASSWORD` 启用注册验证码
+
+### 3.6 Docker 一键部署（推荐）
+
+项目已内置 Docker Compose 编排（MySQL + Redis + 后端 + 前端 nginx），一条命令拉起全栈：
+
+```bash
+cp .env.example .env      # JWT_SECRET 必填强随机值
+docker compose up -d --build
+```
+
+- 访问 `http://localhost/`（前端 nginx 反代 `/api`），后端 API 文档 `http://localhost:8000/docs`
+- 应用镜像由 GitHub Actions 自动构建推送至 GHCR（`ghcr.io/kangkang-ship-it/raglearnlittle-{backend,front}`），也可 `docker compose pull` 直接拉取，无需本地构建
+- 重排序模型（约 1GB）首次启动自动下载，可挂载本地 HuggingFace 缓存目录复用（见 `docker-compose.yml` 注释）
 
 ---
 
