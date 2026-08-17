@@ -42,9 +42,10 @@ class EmailService:
 
     Attributes:
         smtp_host: SMTP 服务器地址
-        smtp_port: SMTP 端口（QQ 邮箱 587，STARTTLS）
+        smtp_port: SMTP 端口（QQ 587 STARTTLS；网易 465 SSL）
         smtp_username: 发件邮箱
         smtp_password: 授权码（非登录密码）
+        smtp_ssl_mode: 连接安全模式 starttls（默认）/ ssl / none
         smtp_from_name: 发件人显示名称
     """
 
@@ -58,6 +59,13 @@ class EmailService:
         self.smtp_port = int(config.get("SMTP_PORT") or os.getenv("SMTP_PORT", "587"))
         self.smtp_username = config.get("SMTP_USERNAME") or os.getenv("SMTP_USERNAME", "")
         self.smtp_password = config.get("SMTP_PASSWORD") or os.getenv("SMTP_PASSWORD", "")
+        # 连接安全模式：starttls=STARTTLS（QQ 587 等）；ssl=隐式 SSL（网易 465）；none=不加密（仅测试）
+        self.smtp_ssl_mode = (
+            config.get("SMTP_SSL_MODE") or os.getenv("SMTP_SSL_MODE", "starttls")
+        ).strip().lower()
+        if self.smtp_ssl_mode not in ("starttls", "ssl", "none"):
+            logger.warning(f"SMTP_SSL_MODE 未知值 {self.smtp_ssl_mode!r}，回退为 starttls")
+            self.smtp_ssl_mode = "starttls"
         self.smtp_from_name = config.get("SMTP_FROM_NAME") or os.getenv("SMTP_FROM_NAME", "云尚")
         self.template_path = (
             Path(__file__).resolve().parent.parent.parent
@@ -136,8 +144,8 @@ class EmailService:
                     hostname=self.smtp_host,
                     port=self.smtp_port,
                     timeout=10,
-                    use_tls=False,
-                    start_tls=True,
+                    use_tls=self.smtp_ssl_mode == "ssl",
+                    start_tls=self.smtp_ssl_mode == "starttls",
                 ) as smtp:
                     if self.smtp_username:
                         await smtp.login(self.smtp_username, self.smtp_password)

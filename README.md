@@ -185,6 +185,14 @@ REDIS_PORT=6379
 
 # JWT 签名密钥（生成命令: python -c "import secrets; print(secrets.token_hex(32))"）
 JWT_SECRET=你的随机密钥
+
+# 邮件（注册/改邮箱验证码；SMTP_PASSWORD 为邮箱授权码，非登录密码）
+# 网易 163：SMTP_PORT=465 + SMTP_SSL_MODE=ssl；QQ：SMTP_PORT=587 + SMTP_SSL_MODE=starttls
+SMTP_HOST=smtp.163.com
+SMTP_PORT=465
+SMTP_SSL_MODE=ssl
+SMTP_USERNAME=你的邮箱
+SMTP_PASSWORD=你的授权码
 ```
 
 > 💡 获取 DashScope API Key：访问 [阿里云百炼控制台](https://bailian.console.aliyun.com/)，新用户有免费额度。
@@ -209,7 +217,7 @@ npm install
   HF_ENDPOINT=https://hf-mirror.com
   ```
 - **视觉模型**（可选）：设置 `VISION_MODEL=qwen-vl-max` 启用图片/视频理解
-- **邮件服务**（可选）：配置 `SMTP_USERNAME` / `SMTP_PASSWORD` 启用注册验证码
+- **邮件服务**（可选）：配置 `SMTP_HOST` / `SMTP_PORT` / `SMTP_SSL_MODE` / `SMTP_USERNAME` / `SMTP_PASSWORD` 启用注册验证码（网易 465 用 `ssl`，QQ 587 用 `starttls`）
 
 ### 3.6 Docker 一键部署（推荐）
 
